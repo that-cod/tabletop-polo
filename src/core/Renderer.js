@@ -1,0 +1,560 @@
+import { FIELD, COLORS, PHYSICS, MOVEMENT } from '../utils/constants.js';
+
+export class Renderer {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext('2d');
+    this.width = FIELD.width;
+    this.height = FIELD.height;
+    this._buildFieldPattern();
+
+    // Goal celebration flash
+    this.flash = { a: 0, team: 0 };
+
+    // Camera shake
+    this.shake = { x: 0, y: 0, intensity: 0, endMs: 0 };
+
+    // Mallet impact effect
+    this.impact = { x: 0, y: 0, a: 0, sparks: [] };
+
+    // Score pulse (per team)
+    this.scorePulse = [0, 0]; // 0→1 alpha, fades
+  }
+
+  _buildFieldPattern() {
+    // Pre-render the grass background with stripes and texture noise
+    const off = document.createElement('canvas');
+    off.width = this.width;
+    off.height = this.height;
+    const c = off.getContext('2d');
+
+    // Base gradient
+    const g = c.createLinearGradient(0, 0, 0, this.height);
+    g.addColorStop(0, COLORS.grassA);
+    g.addColorStop(0.5, COLORS.grassB);
+    g.addColorStop(1, COLORS.grassA);
+    c.fillStyle = g;
+    c.fillRect(0, 0, this.width, this.height);
+
+    // Vertical mowed stripes
+    const stripeW = 64;
+    for (let x = 0; x < this.width; x += stripeW * 2) {
+      c.fillStyle = 'rgba(255,255,255,0.035)';
+      c.fillRect(x, 0, stripeW, this.height);
+    }
+
+    // Noise specks
+    const img = c.getImageData(0, 0, this.width, this.height);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (Math.random() - 0.5) * 18;
+      d[i]   = Math.max(0, Math.min(255, d[i]   + n));
+      d[i+1] = Math.max(0, Math.min(255, d[i+1] + n * 1.2));
+      d[i+2] = Math.max(0, Math.min(255, d[i+2] + n));
+    }
+    c.putImageData(img, 0, 0);
+
+    // Vignette
+    const rg = c.createRadialGradient(
+      this.width / 2, this.height / 2, this.width * 0.2,
+      this.width / 2, this.height / 2, this.width * 0.75
+    );
+    rg.addColorStop(0, 'rgba(0,0,0,0)');
+    rg.addColorStop(1, 'rgba(0,0,0,0.35)');
+    c.fillStyle = rg;
+    c.fillRect(0, 0, this.width, this.height);
+
+    this.fieldPattern = off;
+  }
+
+  clear() {
+    this.ctx.clearRect(0, 0, this.width, this.height);
+  }
+
+  triggerShake(intensity = 1.0, durationMs = 120) {
+    this.shake.intensity = intensity;
+    this.shake.endMs = performance.now() + durationMs;
+    this.shake.x = (Math.random() - 0.5) * 4 * intensity;
+    this.shake.y = (Math.random() - 0.5) * 4 * intensity;
+  }
+
+  triggerImpact(x, y, power = 1.0) {
+    this.impact.x = x;
+    this.impact.y = y;
+    this.impact.a = 1.0;
+    const count = 4 + Math.floor(power * 4);
+    this.impact.sparks = Array.from({ length: count }, (_, i) => {
+      const ang = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.8;
+      const d = 10 + Math.random() * 14 * power;
+      return { x: x + Math.cos(ang) * d, y: y + Math.sin(ang) * d, r: 1.5 + power * 2 };
+    });
+  }
+
+  triggerScorePulse(teamId) { this.scorePulse[teamId] = 1.5; }
+
+  drawField(ballX, ballY) {
+    const ctx = this.ctx;
+
+    // Camera shake transform
+    ctx.save();
+    if (performance.now() < this.shake.endMs) {
+      ctx.translate(this.shake.x, this.shake.y);
+    } else {
+      this.shake.x = this.shake.y = 0;
+    }
+
+    ctx.drawImage(this.fieldPattern, 0, 0);
+
+    // Danger zone — ball near blue’s goal (right side) is dangerous for the AI
+    // Ball near red’s goal (left side) is dangerous for the human player
+    if (ballX !== undefined) {
+      this._drawDangerZone(ballX, ballY);
+    }
+
+    ctx.restore();  // end shake scope (field only); rest of draw calls use same shake
+
+    // Re-apply shake for subsequent draw calls in same frame
+    if (performance.now() < this.shake.endMs) {
+      ctx.save();
+      ctx.translate(this.shake.x, this.shake.y);
+      this._shakeActive = true;
+    } else {
+      this._shakeActive = false;
+    }
+
+    // Boards (perimeter frame)
+    ctx.strokeStyle = COLORS.boardsLight;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, this.width - 4, this.height - 4);
+
+    // Field lines
+    ctx.strokeStyle = COLORS.line;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(FIELD.margin, FIELD.margin, this.width - FIELD.margin * 2, this.height - FIELD.margin * 2);
+
+    // Halfway line
+    ctx.beginPath();
+    ctx.moveTo(this.width / 2, FIELD.margin);
+    ctx.lineTo(this.width / 2, this.height - FIELD.margin);
+    ctx.stroke();
+
+    // Center circle
+    ctx.beginPath();
+    ctx.arc(this.width / 2, this.height / 2, 60, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Center spot
+    ctx.fillStyle = COLORS.line;
+    ctx.beginPath();
+    ctx.arc(this.width / 2, this.height / 2, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Goal arcs (60-yard D-shapes)
+    ctx.strokeStyle = COLORS.lineSoft;
+    ctx.lineWidth = 2;
+    for (const side of [0, 1]) {
+      const cx = side === 0 ? FIELD.margin : this.width - FIELD.margin;
+      ctx.beginPath();
+      const r = 120;
+      const start = side === 0 ? -Math.PI / 2 : Math.PI / 2;
+      const end   = side === 0 ?  Math.PI / 2 : -Math.PI / 2;
+      ctx.arc(cx, this.height / 2, r, start, end, side === 1);
+      ctx.stroke();
+    }
+
+    this._drawGoals();
+
+    if (this._shakeActive) ctx.restore();
+  }
+
+  _drawDangerZone(ballX, ballY) {
+    const ctx = this.ctx;
+    const now = performance.now();
+    // Danger: ball within 160px of either goal line (x=0 or x=width)
+    const leftDist  = ballX;             // distance to left goal
+    const rightDist = this.width - ballX; // distance to right goal
+    const threshold = 160;
+
+    for (const [dist, side] of [[leftDist, 'left'], [rightDist, 'right']]) {
+      if (dist < threshold) {
+        const intensity = (1 - dist / threshold) * 0.22;
+        const pulse = 0.5 + 0.5 * Math.sin(now / 160);
+        ctx.fillStyle = `rgba(255,50,50,${intensity * pulse})`;
+        if (side === 'left') {
+          ctx.fillRect(0, 0, threshold, this.height);
+        } else {
+          ctx.fillRect(this.width - threshold, 0, threshold, this.height);
+        }
+      }
+    }
+  }
+
+  _drawGoals() {
+    const ctx = this.ctx;
+    const { goalWidth, goalDepth } = FIELD;
+    const yTop    = this.height / 2 - goalWidth / 2;
+    const yBottom = yTop + goalWidth;
+    const postW   = 6;   // goal-post bar thickness
+    const netDepth = goalDepth + 4; // net drawn inward from edge
+
+    // ── LEFT GOAL (drawn inward from x=0) ──────────────────────────────
+    ctx.save();
+
+    // Darker net backing
+    ctx.fillStyle = 'rgba(0,0,0,0.40)';
+    ctx.fillRect(0, yTop, netDepth, goalWidth);
+
+    // Net grid lines
+    ctx.strokeStyle = COLORS.goalNet;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= 6; i++) {
+      const y = yTop + (goalWidth * i) / 6;
+      ctx.moveTo(0, y);
+      ctx.lineTo(netDepth, y);
+    }
+    for (let i = 0; i <= 4; i++) {
+      const x = (netDepth * i) / 4;
+      ctx.moveTo(x, yTop);
+      ctx.lineTo(x, yBottom);
+    }
+    ctx.stroke();
+
+    // White goal posts (visible thick bars on the field edge)
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, yTop - postW, postW, postW);          // top post
+    ctx.fillRect(0, yBottom,      postW, postW);          // bottom post
+    // Crossbar along left edge
+    ctx.fillRect(0, yTop - postW, 2, goalWidth + postW * 2);
+
+    // Team A label inside goal
+    ctx.font = 'bold 11px ui-sans-serif, system-ui';
+    ctx.fillStyle = 'rgba(255,100,100,0.7)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('RED', netDepth / 2, this.height / 2);
+
+    ctx.restore();
+
+    // ── RIGHT GOAL (drawn inward from x=width) ─────────────────────────
+    ctx.save();
+
+    // Darker net backing
+    ctx.fillStyle = 'rgba(0,0,0,0.40)';
+    ctx.fillRect(this.width - netDepth, yTop, netDepth, goalWidth);
+
+    // Net grid lines
+    ctx.strokeStyle = COLORS.goalNet;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 0; i <= 6; i++) {
+      const y = yTop + (goalWidth * i) / 6;
+      ctx.moveTo(this.width - netDepth, y);
+      ctx.lineTo(this.width, y);
+    }
+    for (let i = 0; i <= 4; i++) {
+      const x = this.width - netDepth + (netDepth * i) / 4;
+      ctx.moveTo(x, yTop);
+      ctx.lineTo(x, yBottom);
+    }
+    ctx.stroke();
+
+    // White goal posts
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(this.width - postW, yTop - postW, postW, postW); // top post
+    ctx.fillRect(this.width - postW, yBottom,      postW, postW); // bottom post
+    // Crossbar along right edge
+    ctx.fillRect(this.width - 2, yTop - postW, 2, goalWidth + postW * 2);
+
+    // Team B label inside goal
+    ctx.font = 'bold 11px ui-sans-serif, system-ui';
+    ctx.fillStyle = 'rgba(100,160,255,0.7)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('BLUE', this.width - netDepth / 2, this.height / 2);
+
+    ctx.restore();
+  }
+
+  drawBall(ball) {
+    const ctx = this.ctx;
+
+    // Trail — scale size/opacity by speed
+    const speed = ball.getSpeed();
+    for (let i = 0; i < ball.trail.length; i++) {
+      const t = ball.trail[i];
+      const fraction = i / ball.trail.length;
+      const speedScale = Math.min(1, speed / 8);
+      ctx.fillStyle = `rgba(255,255,220,${0.22 * t.a * speedScale * fraction})`;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, ball.radius * (0.4 + 0.6 * fraction), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Shadow
+    ctx.fillStyle = COLORS.shadow;
+    ctx.beginPath();
+    ctx.ellipse(ball.x + 2, ball.y + 4, ball.radius * 1.1, ball.radius * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ball body (3D shaded sphere)
+    const g = ctx.createRadialGradient(
+      ball.x - ball.radius * 0.35, ball.y - ball.radius * 0.35, ball.radius * 0.1,
+      ball.x, ball.y, ball.radius
+    );
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.55, COLORS.ball);
+    g.addColorStop(1, COLORS.ballShade);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Seam
+    ctx.strokeStyle = 'rgba(0,0,0,0.18)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius * 0.65, 0.2, Math.PI + 0.2);
+    ctx.stroke();
+  }
+
+  drawPlayer(player, { selected = false, currentTurn = false } = {}) {
+    const ctx = this.ctx;
+    const { x, y } = player;
+    const r = player.radius;
+    const color = player.teamId === 0 ? COLORS.teamA : COLORS.teamB;
+
+    // Shadow
+    ctx.fillStyle = COLORS.shadow;
+    ctx.beginPath();
+    ctx.ellipse(x + 2, y + 5, r * 1.15, r * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Highlight ring (selection / current turn)
+    if (selected) {
+      ctx.strokeStyle = COLORS.highlight;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (currentTurn) {
+      ctx.strokeStyle = 'rgba(255,209,102,0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Body (horse token) — rounded disc with shading
+    const g = ctx.createRadialGradient(x - r * 0.4, y - r * 0.5, r * 0.2, x, y, r);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.2, color);
+    g.addColorStop(1, '#000000');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rim
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Jersey number area (inner disc)
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px ui-sans-serif, system-ui';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(player.id + 1), x, y + 0.5);
+
+    // Mallet
+    this._drawMallet(player);
+
+    // Facing indicator (small notch)
+    const fx = x + Math.cos(player.facing) * (r - 2);
+    const fy = y + Math.sin(player.facing) * (r - 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.arc(fx, fy, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  _drawMallet(player) {
+    const ctx = this.ctx;
+    const tip = player.getMalletTip();
+    const startX = player.x;
+    const startY = player.y;
+
+    // Shaft
+    ctx.strokeStyle = COLORS.mallet;
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.lineTo(tip.x, tip.y);
+    ctx.stroke();
+
+    // Shaft shadow
+    ctx.strokeStyle = COLORS.malletDark;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(startX + 0.5, startY + 0.8);
+    ctx.lineTo(tip.x + 0.5, tip.y + 0.8);
+    ctx.stroke();
+
+    // Mallet head (small cylinder at tip, perpendicular to shaft)
+    const perp = tip.angle + Math.PI / 2;
+    const hx1 = tip.x + Math.cos(perp) * 4;
+    const hy1 = tip.y + Math.sin(perp) * 4;
+    const hx2 = tip.x - Math.cos(perp) * 4;
+    const hy2 = tip.y - Math.sin(perp) * 4;
+    ctx.strokeStyle = '#f3e2b7';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(hx1, hy1);
+    ctx.lineTo(hx2, hy2);
+    ctx.stroke();
+    ctx.strokeStyle = COLORS.malletDark;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(hx1, hy1);
+    ctx.lineTo(hx2, hy2);
+    ctx.stroke();
+  }
+
+  drawMoveRadius(player) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = 'rgba(255,209,102,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, MOVEMENT.moveRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  drawMoveGhost(player, mx, my, valid) {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = valid ? (player.teamId === 0 ? COLORS.teamA : COLORS.teamB) : '#888';
+    ctx.beginPath();
+    ctx.arc(mx, my, player.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  drawFlickAim(ball, dragStart, dragEnd) {
+    const ctx = this.ctx;
+    // Drag vector
+    const dx = dragEnd.x - dragStart.x;
+    const dy = dragEnd.y - dragStart.y;
+    const len = Math.hypot(dx, dy);
+    const maxLen = PHYSICS.maxDragDistance;
+    const clampedLen = Math.min(len, maxLen);
+    const ratio = clampedLen / maxLen;
+    const nx = len ? -dx / len : 0;
+    const ny = len ? -dy / len : 0;
+
+    // Aim arrow from ball in flick direction
+    const tipX = ball.x + nx * clampedLen;
+    const tipY = ball.y + ny * clampedLen;
+
+    ctx.save();
+    // Pull-back indicator (dashed from ball to cursor)
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(ball.x, ball.y);
+    ctx.lineTo(dragEnd.x, dragEnd.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Flick arrow
+    const power = ratio;
+    const arrowColor = `rgba(${255}, ${Math.round(209 - power * 100)}, ${Math.round(102 - power * 80)}, 0.95)`;
+    ctx.strokeStyle = arrowColor;
+    ctx.fillStyle = arrowColor;
+    ctx.lineWidth = 3 + power * 3;
+    ctx.beginPath();
+    ctx.moveTo(ball.x, ball.y);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+
+    // Arrow head
+    const ah = 10 + power * 6;
+    const ang = Math.atan2(ny, nx);
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - Math.cos(ang - 0.4) * ah, tipY - Math.sin(ang - 0.4) * ah);
+    ctx.lineTo(tipX - Math.cos(ang + 0.4) * ah, tipY - Math.sin(ang + 0.4) * ah);
+    ctx.closePath();
+    ctx.fill();
+
+    // Power meter bar
+    const pmW = 120, pmH = 8;
+    const pmX = ball.x - pmW / 2;
+    const pmY = ball.y - 30;
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(pmX, pmY, pmW, pmH);
+    ctx.fillStyle = arrowColor;
+    ctx.fillRect(pmX, pmY, pmW * ratio, pmH);
+    ctx.restore();
+  }
+
+  drawImpact() {
+    if (this.impact.a <= 0) return;
+    const ctx = this.ctx;
+    const { x, y, a } = this.impact;
+
+    // Ring
+    ctx.save();
+    ctx.strokeStyle = `rgba(255,220,60,${a * 0.9})`;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(x, y, 9 + (1 - a) * 14, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Sparks
+    ctx.fillStyle = `rgba(255,200,40,${a * 0.85})`;
+    for (const s of this.impact.sparks) {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r * a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    this.impact.a = Math.max(0, this.impact.a - 0.06);
+  }
+
+  drawGoalFlash() {
+    if (this.flash.a <= 0) return;
+    const ctx = this.ctx;
+    const c = this.flash.team === 0 ? COLORS.teamA : COLORS.teamB;
+    ctx.save();
+    ctx.globalAlpha = this.flash.a;
+    ctx.fillStyle = c;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillRect(0, 0, this.width, this.height);
+    ctx.restore();
+    this.flash.a = Math.max(0, this.flash.a - 0.02);
+  }
+
+  tickScorePulse() {
+    this.scorePulse[0] = Math.max(0, this.scorePulse[0] - 0.04);
+    this.scorePulse[1] = Math.max(0, this.scorePulse[1] - 0.04);
+  }
+
+  triggerGoalFlash(teamId) {
+    this.flash.a = 0.45;
+    this.flash.team = teamId;
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "tabletop-polo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Physics-based tabletop polo game (Matter.js + Canvas + Vite).",
+  "scripts": {
+    "dev": "vite --port 3000 --open",
+    "build": "vite build",
+    "preview": "vite preview --port 3000"
+  },
+  "dependencies": {
+    "matter-js": "^0.19.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
