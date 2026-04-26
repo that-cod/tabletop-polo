@@ -66,16 +66,24 @@ export const MOVEMENT = {
 export const MATCH = {
   chukkas: 4,
   chukkaSeconds: 120,        // 2 min — 8 min match total
-  playersPerTeam: 3,
+  overtimeSeconds: 90,       // golden chukka — sudden death
+  playersPerTeam: 4,         // real polo: 4 players per team
 };
 
 export const AI = {
-  reactionMs: 420,          // snappier reaction
+  reactionMs: 420,           // base (medium) reaction
   moveNoise: 14,
-  flickNoiseAngle: 0.18,    // radians jitter
-  flickPowerMin: 0.55,      // fraction of maxDrag
+  flickNoiseAngle: 0.18,     // radians jitter
+  flickPowerMin: 0.55,
   flickPowerMax: 0.95,
-  longShotChance: 0.25,     // 25% chance of aggressive long-range shot
+  longShotChance: 0.25,
+
+  // Per-difficulty overrides — read by AIOpponent
+  difficulty: {
+    easy:   { reactionMs: 900,  noiseAngle: 0.40, longShotChance: 0.08, supportMove: false },
+    medium: { reactionMs: 420,  noiseAngle: 0.18, longShotChance: 0.25, supportMove: true  },
+    hard:   { reactionMs: 220,  noiseAngle: 0.07, longShotChance: 0.42, supportMove: true  },
+  },
 };
 
 export const DEBUG = {

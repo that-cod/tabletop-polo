@@ -7,12 +7,14 @@ export class AIOpponent {
     this.difficulty = difficulty; // easy | medium | hard
     this._timer = 0;
     this._thinking = false;
-    this.pendingAction = null;
+  }
+
+  _cfg() {
+    return AI.difficulty[this.difficulty] || AI.difficulty.medium;
   }
 
   // Called every frame when it's AI's turn and phase === 'choose'
   update(dt, ctx) {
-    // ctx: { ball, turnManager, opponentTeam, applyFlick }
     if (this._thinking) {
       this._timer -= dt * 1000;
       if (this._timer <= 0) {
@@ -21,43 +23,43 @@ export class AIOpponent {
       }
       return;
     }
-    // begin thinking
     this._thinking = true;
-    this._timer = AI.reactionMs * (this.difficulty === 'hard' ? 0.7 : this.difficulty === 'easy' ? 1.4 : 1);
+    this._timer = this._cfg().reactionMs;
   }
 
   _execute(ctx) {
     const { ball, turnManager, opponentTeam, applyFlick } = ctx;
+    const cfg = this._cfg();
 
     // Sort players by distance to ball
     const sorted = [...this.team.players].sort((a, b) =>
       Math.hypot(a.x - ball.x, a.y - ball.y) - Math.hypot(b.x - ball.x, b.y - ball.y)
     );
     const player = sorted[0];
-    const goalX = this.team.id === 0 ? FIELD.width + 10 : -10;
+
+    // Goal target respects current attackDir (ends-swap aware)
+    const goalX = this.team.attackDir > 0 ? FIELD.width + 10 : -10;
     const goalY = FIELD.centerY;
     const canFlick = player.canReachBall(ball);
 
     if (canFlick) {
-      const isLongShot = Math.random() < AI.longShotChance;
+      const isLongShot = Math.random() < cfg.longShotChance;
       let ang = Math.atan2(goalY - ball.y, goalX - ball.x);
       let powerFrac;
 
       if (isLongShot) {
-        // Aggressive: aim directly at goal, max power, minimal noise
         powerFrac = 0.85 + Math.random() * 0.15;
-        ang += rand(-AI.flickNoiseAngle * 0.4, AI.flickNoiseAngle * 0.4);
+        ang += rand(-cfg.noiseAngle * 0.4, cfg.noiseAngle * 0.4);
       } else {
         powerFrac = rand(AI.flickPowerMin, AI.flickPowerMax);
-        ang += rand(-AI.flickNoiseAngle, AI.flickNoiseAngle) * (this.difficulty === 'hard' ? 0.5 : 1);
+        ang += rand(-cfg.noiseAngle, cfg.noiseAngle);
       }
 
       const targetSpeed = powerFrac * 38;
       player.faceTowards(ball.x, ball.y);
       applyFlick(player, ball, Math.cos(ang) * targetSpeed, Math.sin(ang) * targetSpeed);
 
-      // Also nudge 2nd closest player toward a supporting position
-      this._moveSupporter(sorted[1], ball, goalX, goalY);
+      if (cfg.supportMove) this._moveSupporter(sorted[1], ball, goalX, goalY);
 
       turnManager.commitAction();
     } else {
@@ -75,8 +77,7 @@ export class AIOpponent {
       player.faceTowards(ball.x, ball.y);
       player.startMoveTo(tx, ty);
 
-      // Also move 2nd player into a supporting position
-      this._moveSupporter(sorted[1], ball, goalX, goalY);
+      if (cfg.supportMove) this._moveSupporter(sorted[1], ball, goalX, goalY);
 
       turnManager.commitAction();
     }

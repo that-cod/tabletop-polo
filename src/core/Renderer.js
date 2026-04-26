@@ -18,7 +18,11 @@ export class Renderer {
     this.impact = { x: 0, y: 0, a: 0, sparks: [] };
 
     // Score pulse (per team)
-    this.scorePulse = [0, 0]; // 0→1 alpha, fades
+    this.scorePulse = [0, 0];
+
+    // Commentary ticker
+    this.commentaryText  = '';
+    this.commentaryAlpha = 0;
   }
 
   _buildFieldPattern() {
@@ -556,5 +560,84 @@ export class Renderer {
   triggerGoalFlash(teamId) {
     this.flash.a = 0.45;
     this.flash.team = teamId;
+  }
+
+  // ── Line of Ball ─────────────────────────────────────────────────────────
+  drawLineOfBall(ball) {
+    if (ball.lobAlpha <= 0.02) return;
+    const ctx = this.ctx;
+    const len = 560; // how far the LOB extends across the field
+    const ex = ball.lobX + Math.cos(ball.lobAngle) * len;
+    const ey = ball.lobY + Math.sin(ball.lobAngle) * len;
+    // Backward extension (opposite direction)
+    const bx = ball.lobX - Math.cos(ball.lobAngle) * len;
+    const by = ball.lobY - Math.sin(ball.lobAngle) * len;
+
+    ctx.save();
+    ctx.globalAlpha = ball.lobAlpha * 0.55;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([10, 7]);
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+
+    // Right-of-way arrowhead in the forward direction
+    ctx.setLineDash([]);
+    ctx.globalAlpha = ball.lobAlpha * 0.8;
+    ctx.fillStyle = COLORS.highlight;
+    const ah = 10;
+    const ang = ball.lobAngle;
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - Math.cos(ang - 0.38) * ah, ey - Math.sin(ang - 0.38) * ah);
+    ctx.lineTo(ex - Math.cos(ang + 0.38) * ah, ey - Math.sin(ang + 0.38) * ah);
+    ctx.closePath();
+    ctx.fill();
+
+    // Label near arrowhead
+    ctx.globalAlpha = ball.lobAlpha * 0.75;
+    ctx.font = 'bold 10px ui-sans-serif, system-ui';
+    ctx.fillStyle = COLORS.highlight;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('LINE', ex + Math.cos(ang + Math.PI / 2) * 14,
+                         ey + Math.sin(ang + Math.PI / 2) * 14);
+    ctx.restore();
+  }
+
+  // ── Commentary ticker ────────────────────────────────────────────────────
+  showCommentary(text) {
+    this.commentaryText  = text;
+    this.commentaryAlpha = 1.4; // starts above 1 so it holds at full for a moment
+  }
+
+  drawCommentary() {
+    if (this.commentaryAlpha <= 0) return;
+    const ctx = this.ctx;
+    const alpha = Math.min(1, this.commentaryAlpha);
+    const W = this.width;
+    const H = this.height;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    // Background pill
+    const tw = ctx.measureText(this.commentaryText).width + 28;
+    const tx = W / 2 - tw / 2;
+    const ty = H - 60;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.roundRect(tx, ty, tw, 22, 6);
+    ctx.fill();
+    // Text
+    ctx.font = '12px ui-sans-serif, system-ui';
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(this.commentaryText, W / 2, ty + 11);
+    ctx.restore();
+
+    this.commentaryAlpha = Math.max(0, this.commentaryAlpha - 0.008);
   }
 }

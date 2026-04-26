@@ -14,11 +14,18 @@ export class Menus {
     div.innerHTML = `
       <h1>TABLETOP POLO</h1>
       <p>Flick, strategise, score. 4 chukkas to victory.</p>
-      <button data-act="start">Start Match</button>
+      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT DIFFICULTY</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button style="flex:1;" data-diff="easy">Easy</button>
+        <button style="flex:1;background:#e8a020;" data-diff="medium">Medium</button>
+        <button style="flex:1;background:#c0392b;" data-diff="hard">Hard</button>
+      </div>
       <button class="secondary" data-act="how">How to Play</button>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart(); };
+    div.querySelector('[data-diff="easy"]').onclick   = () => { this.clear(); onStart('easy'); };
+    div.querySelector('[data-diff="medium"]').onclick = () => { this.clear(); onStart('medium'); };
+    div.querySelector('[data-diff="hard"]').onclick   = () => { this.clear(); onStart('hard'); };
     div.querySelector('[data-act="how"]').onclick = () => this.showHowTo(onStart);
   }
 
@@ -37,13 +44,15 @@ export class Menus {
         <li>Otherwise: click any spot within the dashed radius to move there.</li>
         <li>After your action, the BLUE AI takes a turn when things stop.</li>
         <li>Score by knocking the ball into the opposing goal.</li>
-        <li>Match = 4 chukkas of 7 minutes each. Highest score wins.</li>
+        <li>Match = 4 chukkas of 2 minutes each. Highest score wins.</li>
+        <li><b>Ends swap</b> after every goal — teams change direction like real polo.</li>
+        <li>If tied after chukka 4 → <b>Golden Chukka</b> (sudden death — first goal wins).</li>
       </ul>
       <button data-act="start">Start Match</button>
       <button class="secondary" data-act="back">Back</button>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart(); };
+    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart('medium'); };
     div.querySelector('[data-act="back"]').onclick = () => this.showStart(onStart);
   }
 
@@ -65,18 +74,26 @@ export class Menus {
     this.clear();
     const div = document.createElement('div');
     div.className = 'menu';
-    const title = winner === -1 ? 'DRAW' : (winner === 0 ? 'RED WINS!' : 'BLUE WINS!');
+    const title = winner === -1 ? 'DRAW!' : (winner === 0 ? 'RED WINS! 🏆' : 'BLUE WINS! 🏆');
+    const sub   = winner === -1 ? 'A well-fought draw.' : (winner === 0 ? 'Excellent polo!' : 'The AI takes it!');
     div.innerHTML = `
       <h1>${title}</h1>
-      <p>Final score</p>
+      <p>${sub}</p>
       <div class="score-row">
         <span class="red">${teamAScore}</span>
         <span>–</span>
         <span class="blue">${teamBScore}</span>
       </div>
-      <button data-act="again">Play Again</button>
+      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">PLAY AGAIN — SELECT DIFFICULTY</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button style="flex:1;" data-diff="easy">Easy</button>
+        <button style="flex:1;background:#e8a020;" data-diff="medium">Medium</button>
+        <button style="flex:1;background:#c0392b;" data-diff="hard">Hard</button>
+      </div>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-act="again"]').onclick = () => { this.clear(); onRestart(); };
+    div.querySelector('[data-diff="easy"]').onclick   = () => { this.clear(); onRestart('easy'); };
+    div.querySelector('[data-diff="medium"]').onclick = () => { this.clear(); onRestart('medium'); };
+    div.querySelector('[data-diff="hard"]').onclick   = () => { this.clear(); onRestart('hard'); };
   }
 }

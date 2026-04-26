@@ -20,6 +20,11 @@ export class Ball {
     });
     physics.add(this.body);
     this.trail = [];
+    // Line of Ball tracking
+    this.lobAngle = 0;   // radians — direction of last hit
+    this.lobAlpha = 0;   // 0-1, fades after hit
+    this.lobX = FIELD.centerX;
+    this.lobY = FIELD.centerY;
   }
 
   get x() { return this.body.position.x; }
@@ -34,8 +39,14 @@ export class Ball {
   setVelocity(vx, vy) { Body.setVelocity(this.body, { x: vx, y: vy }); }
 
   applyImpulse(ix, iy) {
-    // Set velocity directly for predictable arcade feel
     Body.setVelocity(this.body, { x: ix, y: iy });
+    // Record LOB at moment of hit
+    if (Math.hypot(ix, iy) > 0.5) {
+      this.lobAngle = Math.atan2(iy, ix);
+      this.lobAlpha = 1.0;
+      this.lobX = this.x;
+      this.lobY = this.y;
+    }
   }
 
   stop() {
@@ -48,6 +59,7 @@ export class Ball {
     Body.setPosition(this.body, { x, y });
     Body.setAngle(this.body, 0);
     this.trail.length = 0;
+    this.lobAlpha = 0;
   }
 
   updateTrail() {
@@ -56,5 +68,7 @@ export class Ball {
       if (this.trail.length > 14) this.trail.shift();
     }
     for (const t of this.trail) t.a *= 0.9;
+    // Fade LOB line over ~3 seconds (60fps → ~0.006/frame)
+    if (this.lobAlpha > 0) this.lobAlpha = Math.max(0, this.lobAlpha - 0.006);
   }
 }

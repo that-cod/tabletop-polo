@@ -1,37 +1,59 @@
 import { Player } from './Player.js';
-import { FIELD, MATCH } from '../utils/constants.js';
+import { FIELD } from '../utils/constants.js';
+
+// Role-based formation offsets [xFrac from own half, yFrac of field height]
+// xFrac: 0 = own goal line, 1 = opp goal line (mirrored for team B)
+// Roles: 0=Attacker(#1), 1=All-rounder(#2), 2=Playmaker(#3), 3=Defender(#4)
+const FORMATION = [
+  { xFrac: 0.68, yFrac: 0.35, role: 'attacker'   },  // #1 — up front
+  { xFrac: 0.55, yFrac: 0.62, role: 'allrounder'  },  // #2 — midfield
+  { xFrac: 0.42, yFrac: 0.38, role: 'playmaker'   },  // #3 — midfield back
+  { xFrac: 0.25, yFrac: 0.55, role: 'defender'    },  // #4 — back
+];
 
 export class Team {
   constructor(physics, teamId) {
     this.id = teamId;
     this.players = [];
     this.score = 0;
+    this.attackDir = teamId === 0 ? 1 : -1; // +1 = attack right, -1 = attack left
     this._spawn(physics);
   }
 
+  _spawnPositions() {
+    // For team A (attackDir=+1): x increases toward opponent goal (right)
+    // For team B (attackDir=-1): mirror x
+    return FORMATION.map((f) => {
+      const rawX = FIELD.width * (this.id === 0 ? f.xFrac : 1 - f.xFrac);
+      const rawY = FIELD.height * f.yFrac;
+      return { x: rawX, y: rawY, role: f.role };
+    });
+  }
+
   _spawn(physics) {
-    const n = MATCH.playersPerTeam;
-    const xBase = this.id === 0 ? FIELD.width * 0.28 : FIELD.width * 0.72;
-    const spread = FIELD.height * 0.55;
-    const top = FIELD.centerY - spread / 2;
-    for (let i = 0; i < n; i++) {
-      const y = top + (spread * (i + 1)) / (n + 1);
-      // Stagger X a bit so they don't form a straight line
-      const x = xBase + (i % 2 === 0 ? -18 : 18);
-      this.players.push(new Player(physics, { id: i, teamId: this.id, x, y }));
-    }
+    const positions = this._spawnPositions();
+    positions.forEach((pos, i) => {
+      const p = new Player(physics, { id: i, teamId: this.id, x: pos.x, y: pos.y });
+      p.role = pos.role;
+      this.players.push(p);
+    });
   }
 
   reset() {
-    const n = MATCH.playersPerTeam;
-    const xBase = this.id === 0 ? FIELD.width * 0.28 : FIELD.width * 0.72;
-    const spread = FIELD.height * 0.55;
-    const top = FIELD.centerY - spread / 2;
+    const positions = this._spawnPositions();
     this.players.forEach((p, i) => {
-      const y = top + (spread * (i + 1)) / (n + 1);
-      const x = xBase + (i % 2 === 0 ? -18 : 18);
-      p.setPosition(x, y);
-      p.facing = this.id === 0 ? 0 : Math.PI;
+      p.setPosition(positions[i].x, positions[i].y);
+      p.facing = this.attackDir > 0 ? 0 : Math.PI;
+    });
+  }
+
+  // Flip all player X positions and reverse attack direction (called after every goal)
+  flipEnds() {
+    this.attackDir *= -1;
+    this.players.forEach((p) => {
+      const newX = FIELD.width - p.x;
+      p.setPosition(newX, p.y);
+      p.facing = this.attackDir > 0 ? 0 : Math.PI;
     });
   }
 

@@ -61,10 +61,23 @@ export class Game {
     this.match.onChukkaEnd = (n) => {
       this.sounds.whistle();
       this.hud.showAnnouncement(`CHUKKA ${n}`);
+      const scoreA = this.teamA.score, scoreB = this.teamB.score;
+      const lead = scoreA > scoreB ? `RED leads ${scoreA}-${scoreB}`
+                 : scoreB > scoreA ? `BLUE leads ${scoreB}-${scoreA}`
+                 : `Level at ${scoreA}-${scoreB}`;
+      const isLast = n === this.match.maxChukkas;
+      this.renderer.showCommentary(
+        isLast ? `Final chukka! ${lead} — everything to play for!`
+               : `Chukka ${n} begins. ${lead}.`
+      );
       this._resetPositions();
+      // Reset attackDir to default at chukka start
+      this.teamA.attackDir = 1;
+      this.teamB.attackDir = -1;
       this.turnManager.reset(0);
     };
-    this.match.onMatchEnd = (winner) => this._onMatchEnd(winner);
+    this.match.onMatchEnd  = (winner) => this._onMatchEnd(winner);
+    this.match.onOvertime   = ()       => this._onOvertime();
 
     this.turnManager.onTurnChange = (teamId) => {
       this.selectedPlayer = null;
@@ -83,16 +96,18 @@ export class Game {
   }
 
   start() {
-    this.menus.showStart(() => this._startMatch());
+    this.menus.showStart((diff) => this._startMatch(diff));
     this._running = true;
     requestAnimationFrame((t) => this._loop(t));
   }
 
-  _startMatch() {
+  _startMatch(difficulty = 'medium') {
+    this.ai.difficulty = difficulty;
     this._resetMatch();
     this.match.start();
     this.scene = SCENE.PLAYING;
     this.sounds.whistle();
+    this.hud.showAnnouncement(difficulty === 'easy' ? 'EASY' : difficulty === 'hard' ? 'HARD MODE' : 'MEDIUM');
   }
 
   _resetMatch() {
@@ -101,6 +116,10 @@ export class Game {
     this.match.chukka = 1;
     this.match.timeLeft = MATCH.chukkaSeconds;
     this.match.ended = false;
+    this.match.isOvertime = false;
+    // Reset attack directions to default before resetting positions
+    this.teamA.attackDir = 1;
+    this.teamB.attackDir = -1;
     this._resetPositions();
     this.turnManager.reset(0);
   }
@@ -222,9 +241,50 @@ export class Game {
     const power = Math.min(1, speed / 18);
     this.renderer.triggerImpact(tip.x, tip.y, power);
     if (power > 0.5) this.renderer.triggerShake(power * 1.2, 110);
+    // Commentary
+    this._fireFlickCommentary(player, power);
+  }
+
+  _fireFlickCommentary(player, power) {
+    const teamName = player.teamId === 0 ? 'RED' : 'BLUE';
+    const role = player.role || '';
+    const roleLabel = role === 'attacker' ? '#1' : role === 'allrounder' ? '#2' : role === 'playmaker' ? '#3' : '#4';
+    const lines = power > 0.88
+      ? [
+          `${teamName} ${roleLabel} unleashes a thunderous strike!`,
+          `What a hit from ${teamName} ${roleLabel}!`,
+          `Full power from ${teamName}!`,
+          `${teamName} goes for goal!`,
+        ]
+      : power > 0.55
+      ? [
+          `${teamName} ${roleLabel} moves the ball forward.`,
+          `${teamName} plays it through the midfield.`,
+          `${teamName} ${roleLabel} drives toward goal.`,
+          `Good strike from ${teamName} ${roleLabel}.`,
+        ]
+      : [
+          `${teamName} taps it gently.`,
+          `A careful touch from ${teamName} ${roleLabel}.`,
+          `${teamName} keeps possession.`,
+        ];
+    this.renderer.showCommentary(lines[Math.floor(Math.random() * lines.length)]);
   }
 
   _onGoal(scoringTeamId) {
+    // In overtime, first goal ends the match immediately
+    if (this.match.isOvertime) {
+      this.match.scoreGoal(scoringTeamId);
+      this.renderer.triggerGoalFlash(scoringTeamId);
+      this.renderer.triggerScorePulse(scoringTeamId);
+      this.renderer.triggerShake(1.8, 200);
+      this.hud.showAnnouncement('GOLDEN GOAL!');
+      this.sounds.goal();
+      this.scene = SCENE.GOAL;
+      setTimeout(() => this._onMatchEnd(scoringTeamId), 1800);
+      return;
+    }
+
     this.match.scoreGoal(scoringTeamId);
     this.renderer.triggerGoalFlash(scoringTeamId);
     this.renderer.triggerScorePulse(scoringTeamId);
@@ -234,11 +294,25 @@ export class Game {
     this.scene = SCENE.GOAL;
 
     setTimeout(() => {
-      this._resetPositions();
-      // Losing team takes the restart
+      // Ends swap: both teams flip sides (real polo rule)
+      this.teamA.flipEnds();
+      this.teamB.flipEnds();
+      this.ball.reset();
       this.turnManager.reset(1 - scoringTeamId);
       this.scene = SCENE.PLAYING;
+      this.hud.showAnnouncement('ENDS CHANGE');
+      this.renderer.showCommentary('Teams swap ends — classic polo!');
     }, 1400);
+  }
+
+  _onOvertime() {
+    this.sounds.whistle();
+    this.hud.showAnnouncement('GOLDEN CHUKKA!');
+    this.renderer.showCommentary('Scores level — sudden death! First goal wins!');
+    this._resetPositions();
+    this.teamA.attackDir = 1;
+    this.teamB.attackDir = -1;
+    this.turnManager.reset(0);
   }
 
   _onMatchEnd(winner) {
@@ -247,7 +321,7 @@ export class Game {
     setTimeout(() => {
       this.menus.showGameOver(
         this.teamA.score, this.teamB.score, winner,
-        () => this._startMatch()
+        (diff) => this._startMatch(diff)
       );
     }, 600);
   }
@@ -322,6 +396,9 @@ export class Game {
       });
     }
 
+    // Line of Ball
+    this.renderer.drawLineOfBall(this.ball);
+
     // Ball
     this.renderer.drawBall(this.ball);
 
@@ -336,6 +413,9 @@ export class Game {
 
     // Goal flash
     this.renderer.drawGoalFlash();
+
+    // Commentary ticker
+    this.renderer.drawCommentary();
 
     // HUD
     this.hud.draw(this.match, this.turnManager, this.renderer.scorePulse);

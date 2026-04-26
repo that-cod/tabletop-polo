@@ -9,9 +9,11 @@ export class Match {
     this.timeLeft = MATCH.chukkaSeconds;
     this.running = false;
     this.ended = false;
+    this.isOvertime = false;
 
     this.onChukkaEnd = null;
     this.onMatchEnd = null;
+    this.onOvertime  = null;
     this.onGoal = null;
   }
 
@@ -32,10 +34,24 @@ export class Match {
 
   _endChukka() {
     this.timeLeft = 0;
-    if (this.chukka >= this.maxChukkas) {
+    if (this.isOvertime) {
+      // Overtime clock ran out with no golden goal — end match on current score
       this.ended = true;
       this.running = false;
       if (this.onMatchEnd) this.onMatchEnd(this.winner());
+      return;
+    }
+    if (this.chukka >= this.maxChukkas) {
+      if (this.winner() === -1) {
+        // Tied — start golden chukka (sudden death)
+        this.isOvertime = true;
+        this.timeLeft = MATCH.overtimeSeconds;
+        if (this.onOvertime) this.onOvertime();
+      } else {
+        this.ended = true;
+        this.running = false;
+        if (this.onMatchEnd) this.onMatchEnd(this.winner());
+      }
     } else {
       this.chukka++;
       this.timeLeft = MATCH.chukkaSeconds;
