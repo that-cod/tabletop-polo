@@ -59,8 +59,9 @@ export const PHYSICS = {
 export const MOVEMENT = {
   moveRadius: 150,
   moveSpeed: 240,           // px/sec
-  turnStopSpeed: 0.15,      // only fire when ball is truly at rest
-  stopHoldMs: 4000,         // 4 seconds of rest before turn switches
+  turnStopSpeed: 0.15,
+  stopHoldMs: 4000,
+  rowBonusPx: 50,           // extra move radius when you hold right-of-way
 };
 
 export const MATCH = {

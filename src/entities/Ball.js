@@ -25,6 +25,7 @@ export class Ball {
     this.lobAlpha = 0;   // 0-1, fades after hit
     this.lobX = FIELD.centerX;
     this.lobY = FIELD.centerY;
+    this.rowTeamId = -1; // team that currently holds right-of-way (-1 = none)
   }
 
   get x() { return this.body.position.x; }
@@ -38,14 +39,14 @@ export class Ball {
 
   setVelocity(vx, vy) { Body.setVelocity(this.body, { x: vx, y: vy }); }
 
-  applyImpulse(ix, iy) {
+  applyImpulse(ix, iy, hittingTeamId = -1) {
     Body.setVelocity(this.body, { x: ix, y: iy });
-    // Record LOB at moment of hit
     if (Math.hypot(ix, iy) > 0.5) {
       this.lobAngle = Math.atan2(iy, ix);
       this.lobAlpha = 1.0;
       this.lobX = this.x;
       this.lobY = this.y;
+      this.rowTeamId = hittingTeamId; // hitting team holds right-of-way
     }
   }
 

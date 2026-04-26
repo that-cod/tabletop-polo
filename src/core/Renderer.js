@@ -432,7 +432,7 @@ export class Renderer {
     ctx.stroke();
   }
 
-  drawMoveRadius(player) {
+  drawMoveRadius(player, rowBonus = 0) {
     const ctx = this.ctx;
     ctx.save();
     ctx.setLineDash([6, 6]);
@@ -441,6 +441,23 @@ export class Renderer {
     ctx.beginPath();
     ctx.arc(player.x, player.y, MOVEMENT.moveRadius, 0, Math.PI * 2);
     ctx.stroke();
+
+    if (rowBonus > 0) {
+      // Outer ring shows extended ROW reach
+      ctx.setLineDash([4, 5]);
+      ctx.strokeStyle = 'rgba(100,255,180,0.55)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, MOVEMENT.moveRadius + rowBonus, 0, Math.PI * 2);
+      ctx.stroke();
+      // Small label
+      ctx.setLineDash([]);
+      ctx.font = 'bold 10px ui-sans-serif, system-ui';
+      ctx.fillStyle = 'rgba(100,255,180,0.85)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('RIGHT OF WAY', player.x, player.y - MOVEMENT.moveRadius - rowBonus - 10);
+    }
     ctx.restore();
   }
 
@@ -604,6 +621,30 @@ export class Renderer {
     ctx.textBaseline = 'middle';
     ctx.fillText('LINE', ex + Math.cos(ang + Math.PI / 2) * 14,
                          ey + Math.sin(ang + Math.PI / 2) * 14);
+    ctx.restore();
+  }
+
+  // ── Hook prompt ─────────────────────────────────────────────────────────
+  drawHookPrompt(ball) {
+    const ctx = this.ctx;
+    const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 120);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.font = 'bold 13px ui-sans-serif, system-ui';
+    const label = 'Press  H  to HOOK!';
+    const tw = ctx.measureText(label).width + 24;
+    const tx = ball.x - tw / 2;
+    const ty = ball.y - 48;
+    // Badge background
+    ctx.fillStyle = 'rgba(255,80,80,0.82)';
+    ctx.beginPath();
+    ctx.roundRect(tx, ty, tw, 24, 6);
+    ctx.fill();
+    // Text
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, ball.x, ty + 12);
     ctx.restore();
   }
 

@@ -6,6 +6,9 @@ import { Match } from '../entities/Match.js';
 import { InputManager } from '../input/InputManager.js';
 import { TurnManager } from '../systems/TurnManager.js';
 import { GoalDetection } from '../systems/GoalDetection.js';
+import { BoundarySystem } from '../systems/BoundarySystem.js';
+import { FoulDetection } from '../systems/FoulDetection.js';
+import { HookSystem } from '../systems/HookSystem.js';
 import { AIOpponent } from '../ai/AIOpponent.js';
 import { HUD } from '../ui/HUD.js';
 import { Menus } from '../ui/Menus.js';
@@ -32,15 +35,27 @@ export class Game {
     this.teamB = new Team(this.physics, 1);
     this.match = new Match(this.teamA, this.teamB);
     this.turnManager = new TurnManager(this.teamA, this.teamB);
-    this.goalDetector = new GoalDetection(this.physics, this.ball);
+    this.goalDetector  = new GoalDetection(this.physics, this.ball);
+    this.boundarySystem = new BoundarySystem(this.physics, this.ball);
+    this.foulDetection  = new FoulDetection(this.ball);
+    this.hookSystem      = new HookSystem();
     this.ai = new AIOpponent(this.teamB, 'medium');
+
+    // Penalty shot state
+    this.penaltyMode   = false;
+    this.penaltyTeamId = -1;
+
+    // Hook state
+    this.hookPromptVisible = false;
 
     // Interaction state (human)
     this.selectedPlayer = null;
-    this.flickMode = false;       // actively dragging to flick
+    this.flickMode = false;
     this.dragStart = null;
     this.dragEnd = null;
     this.hoverPos = { x: 0, y: 0 };
+    // Right-of-way: which team has the bonus this turn
+    this.rowBonusTeam = -1; // -1 = none
 
     this._wireEvents();
 
@@ -57,6 +72,48 @@ export class Game {
     this.input.on('mouseup',   (p) => this._onMouseUp(p));
 
     this.goalDetector.onGoal = (scoringTeamId) => this._onGoal(scoringTeamId);
+
+    this.boundarySystem.onSidelineOut = (exitX, exitY, restartTeamId) => {
+      if (this.scene !== SCENE.PLAYING) return;
+      this.sounds.whistle();
+      this.ball.reset(exitX, exitY);
+      this.turnManager.reset(restartTeamId);
+      const teamName = restartTeamId === 0 ? 'RED' : 'BLUE';
+      this.renderer.showCommentary(`Ball out! ${teamName} restarts from the sideline.`);
+    };
+
+    this.foulDetection.onFoul = (fouledTeamId, spot) => {
+      if (this.scene !== SCENE.PLAYING) return;
+      this.sounds.whistle();
+      this.hud.showAnnouncement('FOUL!');
+      this.renderer.showCommentary(
+        fouledTeamId === 0 ? 'Foul on BLUE — RED takes an undefended penalty!' :
+                            'Foul on RED — BLUE takes an undefended penalty!'
+      );
+      this.scene = SCENE.GOAL; // freeze normal play
+      setTimeout(() => {
+        this.ball.reset(spot.x, spot.y);
+        this.ball.rowTeamId = -1; // clear ROW so no recursive fouls
+        this.penaltyTeamId = fouledTeamId;
+        this.penaltyMode   = fouledTeamId === 0; // human takes penalty if fouledTeam=0
+        this.selectedPlayer = fouledTeamId === 0
+          ? this.teamA.closestToBall(this.ball)
+          : null; // AI will execute its own penalty
+        this.turnManager.reset(fouledTeamId);
+        this.scene = SCENE.PLAYING;
+        if (fouledTeamId === 1) this._executeAIPenalty(); // AI shoots immediately
+      }, 900);
+    };
+
+    this.boundarySystem.onBacklineOut = (restartTeamId, penaltyX, penaltyY) => {
+      if (this.scene !== SCENE.PLAYING) return;
+      this.sounds.whistle();
+      this.ball.reset(penaltyX, penaltyY);
+      this.turnManager.reset(restartTeamId);
+      const teamName = restartTeamId === 0 ? 'RED' : 'BLUE';
+      this.hud.showAnnouncement('FREE HIT');
+      this.renderer.showCommentary(`Backline! ${teamName} takes a free hit.`);
+    };
 
     this.match.onChukkaEnd = (n) => {
       this.sounds.whistle();
@@ -86,11 +143,22 @@ export class Game {
       if (teamId === 1) this.ai.resetTurn();
     };
 
-    // Keyboard: P pauses
+    this.hookSystem.onHookOpportunity = () => { this.hookPromptVisible = true; };
+    this.hookSystem.onHookClose       = () => { this.hookPromptVisible = false; };
+
+    // Keyboard: P pauses, H hooks
     window.addEventListener('keydown', (e) => {
       if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
         if (this.scene === SCENE.PLAYING) this._pause();
         else if (this.scene === SCENE.PAUSED) this._resume();
+      }
+      // H = execute hook if a hook window is open and it's opponent's flick
+      if ((e.key === 'h' || e.key === 'H') && this.hookSystem.active
+          && this.hookSystem.hookerTeamId === 0) {
+        this.hookSystem.executeHook(0, 0); // pre-arm; applied on resolveFlick
+        this.hookPromptVisible = false;
+        this.sounds.hit();
+        this.renderer.showCommentary('HOOK! RED intercepts the mallet!');
       }
     });
   }
@@ -117,9 +185,14 @@ export class Game {
     this.match.timeLeft = MATCH.chukkaSeconds;
     this.match.ended = false;
     this.match.isOvertime = false;
-    // Reset attack directions to default before resetting positions
     this.teamA.attackDir = 1;
     this.teamB.attackDir = -1;
+    this.boundarySystem.reset();
+    this.foulDetection.reset();
+    this.hookSystem.reset();
+    this.penaltyMode       = false;
+    this.penaltyTeamId     = -1;
+    this.hookPromptVisible = false;
     this._resetPositions();
     this.turnManager.reset(0);
   }
@@ -155,7 +228,14 @@ export class Game {
       if (dBall < this.ball.radius + 16) {
         this.flickMode = true;
         this.dragStart = { ...p };
-        this.dragEnd = { ...p };
+        this.dragEnd   = { ...p };
+        // Check if AI has a defender in hook position
+        this.hookSystem.checkFlickSetup(this.selectedPlayer, this.ball, this.teamB);
+        if (this.hookSystem.active && this.hookSystem.aiShouldHook(this.ai.difficulty)) {
+          // AI pre-arms its hook — applied on resolveFlick
+          this.sounds.hit();
+          this.renderer.showCommentary('BLUE defender positions for a hook!');
+        }
         return;
       }
     }
@@ -199,15 +279,34 @@ export class Game {
 
   _tryMove(p) {
     const pl = this.selectedPlayer;
+    const bonus = (this.ball.rowTeamId === 0 && pl.teamId === 0) ? MOVEMENT.rowBonusPx : 0;
     const d = dist(p.x, p.y, pl.x, pl.y);
-    if (d > MOVEMENT.moveRadius) return; // ignored
+    if (d > MOVEMENT.moveRadius + bonus) return;
 
-    // Clamp inside the field margin
     const tx = clamp(p.x, FIELD.margin + pl.radius, FIELD.width - FIELD.margin - pl.radius);
     const ty = clamp(p.y, FIELD.margin + pl.radius, FIELD.height - FIELD.margin - pl.radius);
+
+    // Foul check: did this move cross the active Line of Ball?
+    if (this.foulDetection.checkMove(pl.teamId, tx, ty)) return; // foul called — cancel move
+
     pl.faceTowards(tx, ty);
     pl.startMoveTo(tx, ty);
     this.sounds.hit();
+    this.turnManager.commitAction();
+  }
+
+  _executeAIPenalty() {
+    // AI takes an undefended penalty shot — aimed at center of goal with small noise
+    const pl = this.teamB.closestToBall(this.ball);
+    if (!pl) return;
+    const goalX = this.teamB.attackDir > 0 ? FIELD.width - 20 : 20;
+    const goalY = FIELD.centerY + (Math.random() - 0.5) * 40;
+    const ang   = Math.atan2(goalY - this.ball.y, goalX - this.ball.x);
+    const speed = 28;
+    pl.faceTowards(this.ball.x, this.ball.y);
+    this._applyFlick(pl, this.ball, Math.cos(ang) * speed, Math.sin(ang) * speed);
+    this.penaltyMode   = false;
+    this.penaltyTeamId = -1;
     this.turnManager.commitAction();
   }
 
@@ -218,14 +317,21 @@ export class Game {
     const dx = p.x - this.dragStart.x;
     const dy = p.y - this.dragStart.y;
     const len = Math.hypot(dx, dy);
-    if (len < 6) return; // too small, cancel
+    if (len < 6) return;
 
     const clamped = Math.min(len, PHYSICS.maxDragDistance);
-    // Slingshot: velocity in opposite direction to drag
     const ratio = clamped / PHYSICS.maxDragDistance;
-    const targetSpeed = ratio * 38; // max-power shot travels ~85% of field (frictionAir 0.018)
-    const vx = -(dx / len) * targetSpeed;
-    const vy = -(dy / len) * targetSpeed;
+    const targetSpeed = ratio * 38;
+    let vx = -(dx / len) * targetSpeed;
+    let vy = -(dy / len) * targetSpeed;
+
+    // Apply hook deflection if one was armed (human H-key or AI pre-armed)
+    if (this.hookSystem.active) {
+      const deflected = this.hookSystem.executeHook(vx, vy);
+      vx = deflected.vx;
+      vy = deflected.vy;
+      this.renderer.showCommentary('Hook! Shot deflected!');
+    }
 
     pl.faceTowards(this.ball.x, this.ball.y);
     this._applyFlick(pl, this.ball, vx, vy);
@@ -233,7 +339,7 @@ export class Game {
   }
 
   _applyFlick(player, ball, vx, vy) {
-    ball.applyImpulse(vx, vy);
+    ball.applyImpulse(vx, vy, player.teamId);
     this.sounds.flick();
     // Impact effect at mallet tip
     const tip = player.getMalletTip();
@@ -347,6 +453,9 @@ export class Game {
     this.teamB.update(dt);
     this.ball.updateTrail();
     this.goalDetector.update();
+    this.boundarySystem.update();
+    this.foulDetection.update();
+    this.hookSystem.update(dt);
 
     // Match timer only during choose/resolving (not during GOAL pause)
     if (this.scene === SCENE.PLAYING) this.match.update(dt);
@@ -374,11 +483,13 @@ export class Game {
     // Move radius under selected player
     if (this.selectedPlayer && this.turnManager.isHumanTurn() && this.turnManager.phase === 'choose'
         && !this.flickMode) {
-      this.renderer.drawMoveRadius(this.selectedPlayer);
+      const rowBonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
+      this.renderer.drawMoveRadius(this.selectedPlayer, rowBonus);
       // Ghost preview of move destination
       if (!this.selectedPlayer.canReachBall(this.ball) || dist(this.hoverPos.x, this.hoverPos.y, this.ball.x, this.ball.y) > this.ball.radius + 16) {
+        const bonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
         const d = dist(this.hoverPos.x, this.hoverPos.y, this.selectedPlayer.x, this.selectedPlayer.y);
-        const valid = d <= MOVEMENT.moveRadius;
+        const valid = d <= MOVEMENT.moveRadius + bonus;
         this.renderer.drawMoveGhost(this.selectedPlayer, this.hoverPos.x, this.hoverPos.y, valid);
       }
     }
@@ -413,6 +524,11 @@ export class Game {
 
     // Goal flash
     this.renderer.drawGoalFlash();
+
+    // Hook prompt (when AI defender is in position during human's flick drag)
+    if (this.hookPromptVisible && this.hookSystem.hookerTeamId === 0 && this.flickMode) {
+      this.renderer.drawHookPrompt(this.ball);
+    }
 
     // Commentary ticker
     this.renderer.drawCommentary();
