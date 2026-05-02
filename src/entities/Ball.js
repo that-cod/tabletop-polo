@@ -4,8 +4,9 @@ import { PHYSICS, CATEGORY, FIELD } from '../utils/constants.js';
 const { Bodies, Body } = Matter;
 
 export class Ball {
-  constructor(physics, x = FIELD.centerX, y = FIELD.centerY) {
+  constructor(physics, x = FIELD.centerX, y = FIELD.centerY, fieldCfg = null) {
     this.physics = physics;
+    this._field = fieldCfg || FIELD;
     this.radius = PHYSICS.ballRadius;
     this.body = Bodies.circle(x, y, this.radius, {
       restitution: PHYSICS.ballRestitution,
@@ -23,8 +24,8 @@ export class Ball {
     // Line of Ball tracking
     this.lobAngle = 0;   // radians — direction of last hit
     this.lobAlpha = 0;   // 0-1, fades after hit
-    this.lobX = FIELD.centerX;
-    this.lobY = FIELD.centerY;
+    this.lobX = this._field.centerX;
+    this.lobY = this._field.centerY;
     this.rowTeamId = -1; // team that currently holds right-of-way (-1 = none)
   }
 
@@ -55,7 +56,7 @@ export class Ball {
     Body.setAngularVelocity(this.body, 0);
   }
 
-  reset(x = FIELD.centerX, y = FIELD.centerY) {
+  reset(x = this._field.centerX, y = this._field.centerY) {
     this.stop();
     Body.setPosition(this.body, { x, y });
     Body.setAngle(this.body, 0);

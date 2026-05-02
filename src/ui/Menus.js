@@ -10,18 +10,43 @@ export class Menus {
 
   showStart(onStart) {
     this.clear();
+    this._selectedMode = 'vsAI'; // default
     const div = document.createElement('div');
     div.className = 'menu';
     div.innerHTML = `
       <h1>TABLETOP POLO</h1>
       <p>Flick, strategise, score. 4 chukkas to victory.</p>
+      <p style="font-size:12px;opacity:0.6;margin-bottom:4px;">GAME MODE</p>
+      ${this._modeButtons()}
       <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT SKILL TIER</p>
       ${this._tierButtons()}
       <button class="secondary" data-act="how">How to Play</button>
     `;
     this.el.appendChild(div);
-    this._wireTierButtons(div, onStart);
+    this._wireModeButtons(div);
+    this._wireTierButtons(div, (tier) => onStart(tier, this._selectedMode));
     div.querySelector('[data-act="how"]').onclick = () => this.showHowTo(onStart);
+  }
+
+  _modeButtons() {
+    return `<div style="display:flex;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
+      <button style="flex:1;min-width:70px;background:#1a5f9e;font-size:11px;" data-mode="vsAI">🤖<br><b>vs AI</b><br><span style="font-size:9px;opacity:0.8;">Field polo</span></button>
+      <button style="flex:1;min-width:70px;background:#5a3f8a;font-size:11px;" data-mode="2p">👥<br><b>Hot Seat</b><br><span style="font-size:9px;opacity:0.8;">2 players</span></button>
+      <button style="flex:1;min-width:70px;background:#7a3a1a;font-size:11px;" data-mode="arena">🏟️<br><b>Arena</b><br><span style="font-size:9px;opacity:0.8;">3v3 boards</span></button>
+      <button style="flex:1;min-width:70px;background:#4a1a6a;font-size:11px;" data-mode="tournament">🏆<br><b>Tournament</b><br><span style="font-size:9px;opacity:0.8;">3 matches</span></button>
+    </div>
+    <p style="font-size:10px;opacity:0.45;margin:2px 0 8px;text-align:center;">Tournament ignores tier — 3 escalating AI matches.</p>`;
+  }
+
+  _wireModeButtons(div) {
+    div.querySelectorAll('[data-mode]').forEach(btn => {
+      if (btn.dataset.mode === this._selectedMode) btn.style.outline = '2px solid #ffd166';
+      btn.onclick = () => {
+        this._selectedMode = btn.dataset.mode;
+        div.querySelectorAll('[data-mode]').forEach(b => b.style.outline = '');
+        btn.style.outline = '2px solid #ffd166';
+      };
+    });
   }
 
   _tierButtons() {
@@ -64,7 +89,7 @@ export class Menus {
       <button class="secondary" data-act="back">Back</button>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart('club'); };
+    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart('club', 'vsAI'); };
     div.querySelector('[data-act="back"]').onclick = () => this.showStart(onStart);
   }
 
@@ -82,12 +107,13 @@ export class Menus {
     div.querySelector('[data-act="restart"]').onclick = () => { this.clear(); onRestart(); };
   }
 
-  showGameOver(teamAScore, teamBScore, winner, onRestart, stats = null) {
+  showGameOver(teamAScore, teamBScore, winner, onRestart, stats = null, customSub = null) {
     this.clear();
     const div = document.createElement('div');
     div.className = 'menu';
     const title = winner === -1 ? 'DRAW!' : (winner === 0 ? 'RED WINS! 🏆' : 'BLUE WINS! 🏆');
-    const sub   = winner === -1 ? 'A well-fought draw.' : (winner === 0 ? 'Excellent polo!' : 'The AI takes it!');
+    const defaultSub = winner === -1 ? 'A well-fought draw.' : (winner === 0 ? 'Excellent polo!' : 'The AI takes it!');
+    const sub = customSub || defaultSub;
     const statsHtml = stats ? this._statsHtml(stats) : '';
     div.innerHTML = `
       <h1>${title}</h1>
@@ -133,6 +159,56 @@ export class Menus {
     `;
     this.el.appendChild(div);
     div.querySelector('[data-act="go"]').onclick = () => { this.clear(); onDone(); };
+  }
+
+  showTournamentRound(round, progress, onStart) {
+    this.clear();
+    const div = document.createElement('div');
+    div.className = 'menu';
+    div.innerHTML = `
+      <h1 style="color:#ffd166">🏆 TOURNAMENT</h1>
+      <p style="font-size:11px;opacity:0.55;margin-bottom:6px;">Progress: ${progress}</p>
+      <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:14px;margin-bottom:14px;">
+        <div style="font-size:18px;font-weight:bold;margin-bottom:4px;">${round.label}</div>
+        <div style="font-size:13px;opacity:0.8;">Match ${round.matchNum} of 3</div>
+        <div style="font-size:12px;opacity:0.65;margin-top:6px;">${round.desc}</div>
+      </div>
+      <p style="font-size:12px;opacity:0.7;">Best 2 of 3 matches wins the tournament.</p>
+      <button data-act="start">Kick Off!</button>
+    `;
+    this.el.appendChild(div);
+    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart(); };
+  }
+
+  showTournamentResult(won, results, goalsA, goalsB, onBack) {
+    this.clear();
+    const div = document.createElement('div');
+    div.className = 'menu';
+    const wins = results.filter(r => r.won).length;
+    const title = won ? '🏆 TOURNAMENT CHAMPION!' : '💔 Tournament Over';
+    const msg   = won
+      ? `You won ${wins} of 3 matches. Magnificent polo!`
+      : `You won ${wins} of 3 matches. Better luck next time.`;
+    const rows = results.map((r, i) =>
+      `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.1);">
+        <span>Match ${i + 1}</span>
+        <span>${r.won ? '✅' : '❌'} <span style="color:#d93636">${r.scoreA}</span> – <span style="color:#2b6fd6">${r.scoreB}</span></span>
+      </div>`
+    ).join('');
+    div.innerHTML = `
+      <h1 style="color:${won ? '#ffd166' : '#aaa'}">${title}</h1>
+      <p>${msg}</p>
+      <div style="background:rgba(0,0,0,0.3);border-radius:8px;padding:12px;margin:10px 0;font-size:13px;">
+        ${rows}
+        <div style="display:flex;justify-content:space-between;padding:8px 0 0;font-weight:bold;">
+          <span>Total Goals</span>
+          <span><span style="color:#d93636">${goalsA}</span> – <span style="color:#2b6fd6">${goalsB}</span></span>
+        </div>
+      </div>
+      <button data-act="back">Back to Menu</button>
+    `;
+    this.el.appendChild(div);
+    div.querySelector('[data-act="back"]').onclick = () => { this.clear(); onBack(); };
   }
 
   showHalftime(scoreA, scoreB, onContinue) {

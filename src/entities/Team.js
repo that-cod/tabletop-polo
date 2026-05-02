@@ -1,9 +1,6 @@
 import { Player } from './Player.js';
 import { FIELD } from '../utils/constants.js';
 
-// Role-based formation offsets [xFrac from own half, yFrac of field height]
-// xFrac: 0 = own goal line, 1 = opp goal line (mirrored for team B)
-// Roles: 0=Attacker(#1), 1=All-rounder(#2), 2=Playmaker(#3), 3=Defender(#4)
 const FORMATION = [
   { xFrac: 0.68, yFrac: 0.35, role: 'attacker'   },  // #1 — up front
   { xFrac: 0.55, yFrac: 0.62, role: 'allrounder'  },  // #2 — midfield
@@ -12,20 +9,27 @@ const FORMATION = [
 ];
 
 export class Team {
-  constructor(physics, teamId) {
+  /**
+   * @param {object} physics
+   * @param {number} teamId
+   * @param {object} [fieldCfg]       - Override field dimensions (Arena mode)
+   * @param {number} [playersPerTeam] - 3 for arena, 4 for field polo
+   */
+  constructor(physics, teamId, fieldCfg = null, playersPerTeam = 4) {
     this.id = teamId;
     this.players = [];
     this.score = 0;
-    this.attackDir = teamId === 0 ? 1 : -1; // +1 = attack right, -1 = attack left
+    this.attackDir = teamId === 0 ? 1 : -1;
+    this._field = fieldCfg || FIELD;
+    this._playersPerTeam = playersPerTeam;
     this._spawn(physics);
   }
 
   _spawnPositions() {
-    // For team A (attackDir=+1): x increases toward opponent goal (right)
-    // For team B (attackDir=-1): mirror x
-    return FORMATION.map((f) => {
-      const rawX = FIELD.width * (this.id === 0 ? f.xFrac : 1 - f.xFrac);
-      const rawY = FIELD.height * f.yFrac;
+    const formation = FORMATION.slice(0, this._playersPerTeam);
+    return formation.map((f) => {
+      const rawX = this._field.width * (this.id === 0 ? f.xFrac : 1 - f.xFrac);
+      const rawY = this._field.height * f.yFrac;
       return { x: rawX, y: rawY, role: f.role };
     });
   }
@@ -47,11 +51,10 @@ export class Team {
     });
   }
 
-  // Flip all player X positions and reverse attack direction (called after every goal)
   flipEnds() {
     this.attackDir *= -1;
     this.players.forEach((p) => {
-      const newX = FIELD.width - p.x;
+      const newX = this._field.width - p.x;
       p.setPosition(newX, p.y);
       p.facing = this.attackDir > 0 ? 0 : Math.PI;
     });

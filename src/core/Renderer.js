@@ -1,11 +1,13 @@
-import { FIELD, COLORS, PHYSICS, MOVEMENT } from '../utils/constants.js';
+import { FIELD, COLORS, PHYSICS, MOVEMENT, ARENA } from '../utils/constants.js';
 
 export class Renderer {
-  constructor(canvas) {
+  constructor(canvas, fieldCfg = null) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.width = FIELD.width;
-    this.height = FIELD.height;
+    this._fieldCfg = fieldCfg || FIELD;
+    this.width  = this._fieldCfg.width;
+    this.height = this._fieldCfg.height;
+    this._isArena = !!fieldCfg;
     this._buildFieldPattern();
 
     // Goal celebration flash
@@ -32,11 +34,13 @@ export class Renderer {
     off.height = this.height;
     const c = off.getContext('2d');
 
-    // Base gradient
+    // Base gradient — use arena colors if in arena mode
+    const grassA = this._isArena ? ARENA.grassA : COLORS.grassA;
+    const grassB = this._isArena ? ARENA.grassB : COLORS.grassB;
     const g = c.createLinearGradient(0, 0, 0, this.height);
-    g.addColorStop(0, COLORS.grassA);
-    g.addColorStop(0.5, COLORS.grassB);
-    g.addColorStop(1, COLORS.grassA);
+    g.addColorStop(0, grassA);
+    g.addColorStop(0.5, grassB);
+    g.addColorStop(1, grassA);
     c.fillStyle = g;
     c.fillRect(0, 0, this.width, this.height);
 
@@ -126,25 +130,29 @@ export class Renderer {
       this._shakeActive = false;
     }
 
+    const F = this._fieldCfg;
+    const boardColor = this._isArena ? ARENA.boardLight : COLORS.boardsLight;
+
     // Boards (perimeter frame)
-    ctx.strokeStyle = COLORS.boardsLight;
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = boardColor;
+    ctx.lineWidth = this._isArena ? 6 : 4;
     ctx.strokeRect(2, 2, this.width - 4, this.height - 4);
 
     // Field lines
     ctx.strokeStyle = COLORS.line;
     ctx.lineWidth = 2;
-    ctx.strokeRect(FIELD.margin, FIELD.margin, this.width - FIELD.margin * 2, this.height - FIELD.margin * 2);
+    ctx.strokeRect(F.margin, F.margin, this.width - F.margin * 2, this.height - F.margin * 2);
 
     // Halfway line
     ctx.beginPath();
-    ctx.moveTo(this.width / 2, FIELD.margin);
-    ctx.lineTo(this.width / 2, this.height - FIELD.margin);
+    ctx.moveTo(this.width / 2, F.margin);
+    ctx.lineTo(this.width / 2, this.height - F.margin);
     ctx.stroke();
 
-    // Center circle
+    // Center circle (smaller in arena)
+    const ccR = this._isArena ? 44 : 60;
     ctx.beginPath();
-    ctx.arc(this.width / 2, this.height / 2, 60, 0, Math.PI * 2);
+    ctx.arc(this.width / 2, this.height / 2, ccR, 0, Math.PI * 2);
     ctx.stroke();
 
     // Center spot
@@ -153,13 +161,13 @@ export class Renderer {
     ctx.arc(this.width / 2, this.height / 2, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Goal arcs (60-yard D-shapes)
+    // Goal arcs (D-shapes) — scaled for arena
     ctx.strokeStyle = COLORS.lineSoft;
     ctx.lineWidth = 2;
     for (const side of [0, 1]) {
-      const cx = side === 0 ? FIELD.margin : this.width - FIELD.margin;
+      const cx = side === 0 ? F.margin : this.width - F.margin;
+      const r  = this._isArena ? 85 : 120;
       ctx.beginPath();
-      const r = 120;
       const start = side === 0 ? -Math.PI / 2 : Math.PI / 2;
       const end   = side === 0 ?  Math.PI / 2 : -Math.PI / 2;
       ctx.arc(cx, this.height / 2, r, start, end, side === 1);
@@ -195,7 +203,7 @@ export class Renderer {
 
   _drawGoals() {
     const ctx = this.ctx;
-    const { goalWidth, goalDepth } = FIELD;
+    const { goalWidth, goalDepth } = this._fieldCfg;
     const yTop    = this.height / 2 - goalWidth / 2;
     const yBottom = yTop + goalWidth;
     const postW   = 6;   // goal-post bar thickness
@@ -322,11 +330,51 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** Draw ball at an arbitrary position (used during replay, no trail). */
+  drawBallAt(x, y) {
+    const ctx = this.ctx;
+    const r = 9; // PHYSICS.ballRadius
+    ctx.fillStyle = COLORS.shadow;
+    ctx.beginPath();
+    ctx.ellipse(x + 2, y + 4, r * 1.1, r * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
+    g.addColorStop(0, '#ffffff');
+    g.addColorStop(0.55, COLORS.ball);
+    g.addColorStop(1, COLORS.ballShade);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /** Show a pulsing REPLAY badge during goal highlight playback. */
+  drawReplayBadge() {
+    const ctx = this.ctx;
+    const pulse = 0.75 + 0.25 * Math.sin(performance.now() / 200);
+    ctx.save();
+    ctx.globalAlpha = pulse;
+    ctx.font = 'bold 13px ui-sans-serif, system-ui';
+    const label = '⏪  REPLAY';
+    const tw = ctx.measureText(label).width + 24;
+    const bx = this.width - tw - 14;
+    const by = 72;
+    ctx.fillStyle = 'rgba(0,0,0,0.62)';
+    ctx.beginPath();
+    ctx.roundRect(bx, by, tw, 24, 6);
+    ctx.fill();
+    ctx.fillStyle = '#ffd166';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, bx + tw / 2, by + 12);
+    ctx.restore();
+  }
+
   drawPlayer(player, { selected = false, currentTurn = false } = {}) {
-    this._drawStaminaArc(player);
+    if (player.stamina !== undefined) this._drawStaminaArc(player);
     const ctx = this.ctx;
     const { x, y } = player;
-    const r = player.radius;
+    const r = player.radius !== undefined ? player.radius : 14;
     const color = player.teamId === 0 ? COLORS.teamA : COLORS.teamB;
 
     // Shadow
@@ -376,14 +424,16 @@ export class Renderer {
     ctx.font = 'bold 11px ui-sans-serif, system-ui';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(player.id + 1), x, y + 0.5);
+    const displayId = player.id !== undefined ? player.id : (player.role === 'attacker' ? 0 : player.role === 'allrounder' ? 1 : player.role === 'playmaker' ? 2 : 3);
+    ctx.fillText(String(displayId + 1), x, y + 0.5);
 
-    // Mallet
-    this._drawMallet(player);
+    // Mallet — only for live Player objects
+    if (typeof player.getMalletTip === 'function') this._drawMallet(player);
 
-    // Facing indicator (small notch)
-    const fx = x + Math.cos(player.facing) * (r - 2);
-    const fy = y + Math.sin(player.facing) * (r - 2);
+    // Facing indicator
+    const facing = player.facing !== undefined ? player.facing : 0;
+    const fx = x + Math.cos(facing) * (r - 2);
+    const fy = y + Math.sin(facing) * (r - 2);
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.beginPath();
     ctx.arc(fx, fy, 2, 0, Math.PI * 2);
@@ -689,6 +739,26 @@ export class Renderer {
   showCommentary(text) {
     this.commentaryText  = text;
     this.commentaryAlpha = 1.4; // starts above 1 so it holds at full for a moment
+  }
+
+  draw2PTurnBanner(teamId) {
+    const ctx = this.ctx;
+    const label = teamId === 0 ? '🔴  RED — YOUR TURN' : '🔵  BLUE — YOUR TURN';
+    const color = teamId === 0 ? 'rgba(180,30,30,0.88)' : 'rgba(30,80,180,0.88)';
+    ctx.save();
+    ctx.font = 'bold 13px ui-sans-serif, system-ui';
+    const tw = ctx.measureText(label).width + 28;
+    const bx = this.width / 2 - tw / 2;
+    const by = 8;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, tw, 24, 6);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, this.width / 2, by + 12);
+    ctx.restore();
   }
 
   drawCommentary() {

@@ -95,6 +95,26 @@ export const HANDICAP = {
   pro:    { difficulty: 'hard',   headStart: -1, label: 'Pro',     desc: 'AI gets +1 head-start' },
 };
 
+// Arena polo mode configuration (overrides FIELD + some PHYSICS values)
+export const ARENA = {
+  field: {
+    width:     720,
+    height:    440,
+    margin:    20,
+    centerX:   360,
+    centerY:   220,
+    goalWidth: 130,
+    goalDepth: 22,
+  },
+  playersPerTeam: 3,            // arena polo is 3v3
+  wallRestitution: 0.82,        // boards are bouncier
+  ballFrictionAir:  0.014,      // slightly faster / more live ball
+  boardColor:  '#5b3a1a',
+  boardLight:  '#7a5530',
+  grassA:      '#1a3d25',
+  grassB:      '#163320',
+};
+
 export const DEBUG = {
   showBodies: false,
   showMalletReach: false,

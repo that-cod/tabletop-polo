@@ -12,47 +12,25 @@ import { HookSystem } from '../systems/HookSystem.js';
 import { PenaltyShootout } from '../systems/PenaltyShootout.js';
 import { RideOffSystem } from '../systems/RideOffSystem.js';
 import { MatchStats } from '../entities/MatchStats.js';
+import { Tournament } from '../systems/Tournament.js';
+import { Replay } from '../systems/Replay.js';
 import { AIOpponent } from '../ai/AIOpponent.js';
 import { HUD } from '../ui/HUD.js';
 import { Menus } from '../ui/Menus.js';
 import { Sounds } from '../audio/Sounds.js';
-import { FIELD, MOVEMENT, PHYSICS, MATCH, HANDICAP } from '../utils/constants.js';
+import { FIELD, MOVEMENT, PHYSICS, MATCH, HANDICAP, ARENA } from '../utils/constants.js';
 import { dist, clamp } from '../utils/math.js';
 
 const SCENE = { MENU: 'menu', PLAYING: 'playing', PAUSED: 'paused', GOAL: 'goal', OVER: 'over' };
 
 export class Game {
   constructor(canvas, overlayEl) {
-    this.canvas = canvas;
-    this.scene = SCENE.MENU;
+    this.canvas   = canvas;
+    this.overlayEl = overlayEl;
+    this.scene    = SCENE.MENU;
 
-    this.physics = new PhysicsEngine();
-    this.renderer = new Renderer(canvas);
-    this.hud = new HUD(canvas);
-    this.menus = new Menus(overlayEl);
+    this.menus  = new Menus(overlayEl);
     this.sounds = new Sounds();
-    this.input = new InputManager(canvas);
-
-    this.ball = new Ball(this.physics);
-    this.teamA = new Team(this.physics, 0);
-    this.teamB = new Team(this.physics, 1);
-    this.match = new Match(this.teamA, this.teamB);
-    this.turnManager = new TurnManager(this.teamA, this.teamB);
-    this.goalDetector  = new GoalDetection(this.physics, this.ball);
-    this.boundarySystem = new BoundarySystem(this.physics, this.ball);
-    this.foulDetection  = new FoulDetection(this.ball);
-    this.hookSystem      = new HookSystem();
-    this.shootout        = new PenaltyShootout();
-    this.rideOff         = new RideOffSystem();
-    this.stats           = new MatchStats();
-    this.ai = new AIOpponent(this.teamB, 'medium');
-
-    // Penalty shot state
-    this.penaltyMode   = false;
-    this.penaltyTeamId = -1;
-
-    // Hook state
-    this.hookPromptVisible = false;
 
     // Interaction state (human)
     this.selectedPlayer = null;
@@ -60,16 +38,91 @@ export class Game {
     this.dragStart = null;
     this.dragEnd = null;
     this.hoverPos = { x: 0, y: 0 };
-    // Right-of-way: which team has the bonus this turn
-    this.rowBonusTeam = -1; // -1 = none
+    this.rowBonusTeam = -1;
+    this.penaltyMode   = false;
+    this.penaltyTeamId = -1;
+    this.hookPromptVisible = false;
+    this.twoPlayer  = false;
+    this.currentMode = 'vsAI';
+    this.currentTier = 'club';
 
-    this._wireEvents();
+    // Build subsystems for the default (field) mode
+    this._buildSystems(null);
+    this._wireInputEvents();
 
     this._lastTime = performance.now();
     this._running = false;
   }
 
-  _wireEvents() {
+  /**
+   * Construct/reconstruct all physics + entity + system objects.
+   * Called once on construction, and again if mode changes (field ↔ arena).
+   * @param {object|null} arenaCfg - Pass ARENA config for arena mode, null for field polo.
+   */
+  _buildSystems(arenaCfg) {
+    // Tear down old physics if rebuilding
+    if (this.physics) {
+      // Remove all event listeners to avoid double-firing
+      if (this.goalDetector)   this.goalDetector.destroy && this.goalDetector.destroy();
+      if (this.boundarySystem) this.boundarySystem.destroy && this.boundarySystem.destroy();
+    }
+
+    const fieldCfg    = arenaCfg ? arenaCfg.field : null;
+    const activeField = fieldCfg || FIELD;
+    const wallRest    = arenaCfg ? arenaCfg.wallRestitution : null;
+    const numPlayers  = arenaCfg ? arenaCfg.playersPerTeam : 4;
+
+    this.activeField = activeField;
+    this.isArenaMode = !!arenaCfg;
+
+    // Resize canvas to match field
+    if (this.canvas) {
+      this.canvas.width  = activeField.width;
+      this.canvas.height = activeField.height;
+    }
+
+    this.physics     = new PhysicsEngine(fieldCfg, wallRest);
+    this.renderer    = new Renderer(this.canvas, fieldCfg);
+    this.hud         = new HUD(this.canvas, fieldCfg);
+    this.input       = new InputManager(this.canvas);
+
+    this.ball    = new Ball(this.physics, activeField.centerX, activeField.centerY, fieldCfg);
+    this.teamA   = new Team(this.physics, 0, fieldCfg, numPlayers);
+    this.teamB   = new Team(this.physics, 1, fieldCfg, numPlayers);
+    this.match   = new Match(this.teamA, this.teamB);
+    this.turnManager    = new TurnManager(this.teamA, this.teamB);
+    this.goalDetector   = new GoalDetection(this.physics, this.ball);
+    this.boundarySystem = new BoundarySystem(this.physics, this.ball);
+    this.foulDetection  = new FoulDetection(this.ball);
+    this.hookSystem     = new HookSystem();
+    this.shootout       = new PenaltyShootout();
+    this.rideOff        = new RideOffSystem();
+    this.stats          = new MatchStats();
+    this.tournament     = new Tournament();
+    this.replay         = new Replay();
+    this.ai             = new AIOpponent(this.teamB, 'medium');
+
+    this._wireGameEvents();
+  }
+
+  _wireInputEvents() {
+    // Keyboard: P pauses, H hooks (wired once — delegates to current this.* refs)
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
+        if (this.scene === SCENE.PLAYING) this._pause();
+        else if (this.scene === SCENE.PAUSED) this._resume();
+      }
+      if ((e.key === 'h' || e.key === 'H') && this.hookSystem.active
+          && this.hookSystem.hookerTeamId === 0) {
+        this.hookSystem.executeHook(0, 0);
+        this.hookPromptVisible = false;
+        this.sounds.hit();
+        this.renderer.showCommentary('HOOK! RED intercepts the mallet!');
+      }
+    });
+  }
+
+  _wireGameEvents() {
     this.input.on('mousemove', (p) => {
       this.hoverPos = { ...p };
       if (this.flickMode && this.dragStart) this.dragEnd = { ...p };
@@ -166,45 +219,79 @@ export class Game {
       this.sounds.whistle();
       this.hud.showAnnouncement('DANGEROUS RIDING!');
       const fouledTeamId = 1 - foulTeamId;
-      const spot = { x: FIELD.width * (fouledTeamId === 0 ? 0.82 : 0.18), y: FIELD.centerY };
+      const af = this.activeField;
+      const spot = { x: af.width * (fouledTeamId === 0 ? 0.82 : 0.18), y: af.centerY };
       this.foulDetection.onFoul(fouledTeamId, spot);
     };
-
-    // Keyboard: P pauses, H hooks
-    window.addEventListener('keydown', (e) => {
-      if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
-        if (this.scene === SCENE.PLAYING) this._pause();
-        else if (this.scene === SCENE.PAUSED) this._resume();
-      }
-      // H = execute hook if a hook window is open and it's opponent's flick
-      if ((e.key === 'h' || e.key === 'H') && this.hookSystem.active
-          && this.hookSystem.hookerTeamId === 0) {
-        this.hookSystem.executeHook(0, 0); // pre-arm; applied on resolveFlick
-        this.hookPromptVisible = false;
-        this.sounds.hit();
-        this.renderer.showCommentary('HOOK! RED intercepts the mallet!');
-      }
-    });
   }
 
   start() {
-    this.menus.showStart((tier) => this._startMatch(tier));
+    this.menus.showStart((tier, mode) => {
+      if (mode === 'tournament') {
+        this._startTournament();
+      } else {
+        this._startMatch(tier, mode);
+      }
+    });
     this._running = true;
     requestAnimationFrame((t) => this._loop(t));
   }
 
-  _startMatch(tier = 'club') {
+  _startTournament() {
+    this.tournament.reset();
+    this.tournament.onRoundStart = (round) => {
+      this.menus.showTournamentRound(round, this.tournament.progressDisplay(), () => {
+        // headStart is AI advantage
+        this._resetMatch();
+        this.teamB.score = round.aiHeadStart;
+        this.ai.difficulty = round.difficulty;
+        this.match.start();
+        this.scene = SCENE.PLAYING;
+        this.sounds.whistle();
+        this.hud.showAnnouncement(round.label);
+      });
+    };
+    this.tournament.onDone = (won, results) => {
+      this.scene = SCENE.OVER;
+      this.sounds.whistle();
+      setTimeout(() => {
+        this.menus.showTournamentResult(
+          won, results, this.tournament.totalGoalsA, this.tournament.totalGoalsB,
+          () => this.menus.showStart((tier, mode) => {
+            if (mode === 'tournament') this._startTournament();
+            else this._startMatch(tier, mode);
+          })
+        );
+      }, 600);
+    };
+    this.currentMode = 'tournament';
+    this.twoPlayer   = false;
+    this.tournament.start();
+  }
+
+  _startMatch(tier = 'club', mode = 'vsAI') {
     const cfg = HANDICAP[tier] || HANDICAP.club;
+    this.twoPlayer   = (mode === '2p' || mode === '2p-arena');
+    this.currentTier = tier;
+    this.currentMode = mode;
+
+    // Rebuild physics/entities if switching between field ↔ arena
+    const needsArena = (mode === 'arena' || mode === '2p-arena');
+    if (needsArena !== this.isArenaMode) {
+      this._buildSystems(needsArena ? ARENA : null);
+    }
+
     this.ai.difficulty = cfg.difficulty;
-    this.currentTier   = tier;
     this._resetMatch();
-    // Apply head-start: positive = human (teamA) gets bonus goals
-    if (cfg.headStart > 0)  this.teamA.score = cfg.headStart;
-    if (cfg.headStart < 0)  this.teamB.score = -cfg.headStart;
+    if (!this.twoPlayer) {
+      if (cfg.headStart > 0) this.teamA.score = cfg.headStart;
+      if (cfg.headStart < 0) this.teamB.score = -cfg.headStart;
+    }
     this.match.start();
     this.scene = SCENE.PLAYING;
     this.sounds.whistle();
-    this.hud.showAnnouncement(cfg.label.toUpperCase());
+    const modeLabel = needsArena ? 'ARENA POLO' : (this.twoPlayer ? '2 PLAYERS' : cfg.label.toUpperCase());
+    this.hud.showAnnouncement(modeLabel);
   }
 
   _resetMatch() {
@@ -222,6 +309,7 @@ export class Game {
     this.shootout.reset();
     this.rideOff.reset();
     this.stats.reset();
+    this.replay.reset();
     this.penaltyMode       = false;
     this.penaltyTeamId     = -1;
     this.hookPromptVisible = false;
@@ -240,7 +328,7 @@ export class Game {
     this.match.pause();
     this.menus.showPause(
       () => this._resume(),
-      () => { this.menus.clear(); this._startMatch(this.currentTier || 'club'); }
+      () => { this.menus.clear(); this._startMatch(this.currentTier || 'club', this.currentMode || 'vsAI'); }
     );
   }
   _resume() {
@@ -252,33 +340,33 @@ export class Game {
 
   _onMouseDown(p) {
     if (this.scene !== SCENE.PLAYING) return;
-    if (!this.turnManager.isHumanTurn() || this.turnManager.phase !== 'choose') return;
+    if (this.turnManager.phase !== 'choose') return;
+    // In vsAI mode only human (team 0) can act via mouse
+    if (!this.twoPlayer && !this.turnManager.isHumanTurn()) return;
 
-    // If we have a selected player and ball is in their reach, try starting a flick
     if (this.selectedPlayer && this.selectedPlayer.canReachBall(this.ball)) {
       const dBall = dist(p.x, p.y, this.ball.x, this.ball.y);
       if (dBall < this.ball.radius + 16) {
         this.flickMode = true;
         this.dragStart = { ...p };
         this.dragEnd   = { ...p };
-        // Check if AI has a defender in hook position
-        this.hookSystem.checkFlickSetup(this.selectedPlayer, this.ball, this.teamB);
-        if (this.hookSystem.active && this.hookSystem.aiShouldHook(this.ai.difficulty)) {
-          // AI pre-arms its hook — applied on resolveFlick
-          this.sounds.hit();
-          this.renderer.showCommentary('BLUE defender positions for a hook!');
+        // Hook only applies in vsAI mode (AI defends)
+        if (!this.twoPlayer) {
+          this.hookSystem.checkFlickSetup(this.selectedPlayer, this.ball, this.teamB);
+          if (this.hookSystem.active && this.hookSystem.aiShouldHook(this.ai.difficulty)) {
+            this.sounds.hit();
+            this.renderer.showCommentary('BLUE defender positions for a hook!');
+          }
         }
         return;
       }
     }
-
-    // Otherwise if a player is already selected, treat as move attempt (handled on mouseup)
-    // Selection happens on mouseup too.
   }
 
   _onMouseUp(p) {
     if (this.scene !== SCENE.PLAYING) return;
-    if (!this.turnManager.isHumanTurn() || this.turnManager.phase !== 'choose') return;
+    if (this.turnManager.phase !== 'choose') return;
+    if (!this.twoPlayer && !this.turnManager.isHumanTurn()) return;
 
     // Finish flick if active
     if (this.flickMode && this.dragStart) {
@@ -288,15 +376,17 @@ export class Game {
       return;
     }
 
-    // Try to select one of our players
-    const clicked = this._pickPlayer(p, this.teamA);
+    // Pick a player from the CURRENT active team
+    const activeTeam = this.twoPlayer
+      ? this.turnManager.currentTeam
+      : this.teamA;
+    const clicked = this._pickPlayer(p, activeTeam);
     if (clicked) {
       this.selectedPlayer = clicked;
       this.sounds.select();
       return;
     }
 
-    // If we have a selected player, try to move to this location
     if (this.selectedPlayer) {
       this._tryMove(p);
     }
@@ -311,7 +401,7 @@ export class Game {
 
   _tryMove(p) {
     const pl = this.selectedPlayer;
-    const rowBonus = (this.ball.rowTeamId === 0 && pl.teamId === 0) ? MOVEMENT.rowBonusPx : 0;
+    const rowBonus = (this.ball.rowTeamId === pl.teamId) ? MOVEMENT.rowBonusPx : 0;
     const effectiveRadius = (MOVEMENT.moveRadius + rowBonus) * pl.staminaMoveMultiplier();
     const d = dist(p.x, p.y, pl.x, pl.y);
     if (d > effectiveRadius) return;
@@ -321,9 +411,10 @@ export class Game {
 
     if (this.foulDetection.checkMove(pl.teamId, tx, ty)) return;
 
-    // Ride-off check: does this move contact an opponent?
-    const foul = this.rideOff.check(pl, tx, ty, this.teamB.players);
-    if (foul) return; // dangerous riding called — cancel move
+    // Ride-off: check against opponents (the OTHER team)
+    const opponentPlayers = pl.teamId === 0 ? this.teamB.players : this.teamA.players;
+    const foul = this.rideOff.check(pl, tx, ty, opponentPlayers);
+    if (foul) return;
 
     pl.faceTowards(tx, ty);
     pl.startMoveTo(tx, ty);
@@ -423,29 +514,21 @@ export class Game {
 
   _onGoal(scoringTeamId) {
     this.stats.recordGoal(scoringTeamId);
-    // In overtime, first goal ends the match immediately
-    if (this.match.isOvertime) {
-      this.match.scoreGoal(scoringTeamId);
-      this.renderer.triggerGoalFlash(scoringTeamId);
-      this.renderer.triggerScorePulse(scoringTeamId);
-      this.renderer.triggerShake(1.8, 200);
-      this.hud.showAnnouncement('GOLDEN GOAL!');
-      this.sounds.goal();
-      this.scene = SCENE.GOAL;
-      setTimeout(() => this._onMatchEnd(scoringTeamId), 1800);
-      return;
-    }
 
+    const teamName = scoringTeamId === 0 ? 'RED' : 'BLUE';
     this.match.scoreGoal(scoringTeamId);
     this.renderer.triggerGoalFlash(scoringTeamId);
     this.renderer.triggerScorePulse(scoringTeamId);
     this.renderer.triggerShake(1.8, 200);
-    this.hud.showAnnouncement('GOAL!');
     this.sounds.goal();
     this.scene = SCENE.GOAL;
 
-    setTimeout(() => {
-      // Ends swap: both teams flip sides (real polo rule)
+    // In overtime, first goal ends the match immediately — still show replay
+    const afterReplay = () => {
+      if (this.match.isOvertime) {
+        this._onMatchEnd(scoringTeamId);
+        return;
+      }
       this.teamA.flipEnds();
       this.teamB.flipEnds();
       this.ball.reset();
@@ -453,7 +536,18 @@ export class Game {
       this.scene = SCENE.PLAYING;
       this.hud.showAnnouncement('ENDS CHANGE');
       this.renderer.showCommentary('Teams swap ends — classic polo!');
-    }, 1400);
+    };
+
+    const label = this.match.isOvertime ? 'GOLDEN GOAL!' : 'GOAL!';
+    this.hud.showAnnouncement(label);
+
+    // Trigger replay playback — resumes play when done
+    this.replay.onDone = afterReplay;
+    this.replay.startPlayback();
+    if (!this.replay.isPlaying) {
+      // Buffer was empty (very early in match); fall back to timed resume
+      setTimeout(afterReplay, 1400);
+    }
   }
 
   _onHalftime() {
@@ -548,11 +642,24 @@ export class Game {
   _onMatchEnd(winner) {
     this.scene = SCENE.OVER;
     this.sounds.whistle();
+
+    // Tournament mode — advance instead of game-over screen
+    if (this.currentMode === 'tournament' && this.tournament.active) {
+      setTimeout(() => {
+        this.tournament.advance(this.teamA.score, this.teamB.score);
+      }, 800);
+      return;
+    }
+
     setTimeout(() => {
+      const sub = this.twoPlayer
+        ? (winner === 0 ? 'RED Player wins!' : winner === 1 ? 'BLUE Player wins!' : 'A great match!')
+        : null;
       this.menus.showGameOver(
         this.teamA.score, this.teamB.score, winner,
-        (tier) => this._startMatch(tier),
-        this.stats ? this.stats.summary() : null
+        (tier) => this._startMatch(tier, this.currentMode || 'vsAI'),
+        this.stats ? this.stats.summary() : null,
+        sub
       );
     }, 600);
   }
@@ -572,6 +679,12 @@ export class Game {
   }
 
   _update(dt) {
+    // During replay playback — advance buffer only, skip all physics
+    if (this.replay.isPlaying) {
+      this.replay.update(dt);
+      return;
+    }
+
     // Step physics and entities
     this.physics.update(dt);
     this.teamA.update(dt);
@@ -584,14 +697,20 @@ export class Game {
     this.hookSystem.update(dt);
     this.rideOff.update();
 
+    // Record frame for potential replay (only during active play)
+    if (this.scene === SCENE.PLAYING) {
+      this.replay.record(this.ball, this.teamA, this.teamB);
+    }
+
     // Match timer only during choose/resolving (not during GOAL pause)
     if (this.scene === SCENE.PLAYING) this.match.update(dt);
 
     // Turn resolution
     this.turnManager.update(dt, this.ball);
 
-    // AI turn
-    if (this.scene === SCENE.PLAYING
+    // AI turn — skipped in 2-player hot-seat mode
+    if (!this.twoPlayer
+        && this.scene === SCENE.PLAYING
         && this.turnManager.currentTeamId === 1
         && this.turnManager.phase === 'choose') {
       this.ai.update(dt, {
@@ -605,20 +724,39 @@ export class Game {
 
   _render() {
     this.renderer.clear();
+
+    // ── REPLAY PLAYBACK ──────────────────────────────────────────────────
+    if (this.replay.isPlaying) {
+      const frame = this.replay.currentFrame();
+      if (frame) {
+        this.renderer.drawField(frame.ball.x, frame.ball.y);
+        for (const snap of frame.teamA) this.renderer.drawPlayer(snap, { currentTurn: false });
+        for (const snap of frame.teamB) this.renderer.drawPlayer(snap, { currentTurn: false });
+        this.renderer.drawBallAt(frame.ball.x, frame.ball.y);
+      } else {
+        this.renderer.drawField(this.ball.x, this.ball.y);
+      }
+      this.renderer.drawGoalFlash();
+      this.renderer.drawReplayBadge();
+      this.hud.draw(this.match, this.turnManager, this.renderer.scorePulse);
+      return;
+    }
+
+    // ── NORMAL RENDER ────────────────────────────────────────────────────
     this.renderer.drawField(this.ball.x, this.ball.y);
 
-    // Move radius under selected player
-    if (this.selectedPlayer && this.turnManager.isHumanTurn() && this.turnManager.phase === 'choose'
-        && !this.flickMode) {
-      const rowBonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
+    // Move radius / ghost — show for the active human's selected player
+    const showMoveUI = this.selectedPlayer
+      && (this.twoPlayer || this.turnManager.isHumanTurn())
+      && this.turnManager.phase === 'choose'
+      && !this.flickMode;
+    if (showMoveUI) {
+      const rowBonus = (this.ball.rowTeamId === this.selectedPlayer.teamId) ? MOVEMENT.rowBonusPx : 0;
       this.renderer.drawMoveRadius(this.selectedPlayer, rowBonus, this.selectedPlayer.staminaMoveMultiplier());
-      // Ghost preview of move destination
       if (!this.selectedPlayer.canReachBall(this.ball) || dist(this.hoverPos.x, this.hoverPos.y, this.ball.x, this.ball.y) > this.ball.radius + 16) {
-        const bonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
-        const effR  = (MOVEMENT.moveRadius + bonus) * this.selectedPlayer.staminaMoveMultiplier();
+        const effR = (MOVEMENT.moveRadius + rowBonus) * this.selectedPlayer.staminaMoveMultiplier();
         const d = dist(this.hoverPos.x, this.hoverPos.y, this.selectedPlayer.x, this.selectedPlayer.y);
-        const valid = d <= effR;
-        this.renderer.drawMoveGhost(this.selectedPlayer, this.hoverPos.x, this.hoverPos.y, valid);
+        this.renderer.drawMoveGhost(this.selectedPlayer, this.hoverPos.x, this.hoverPos.y, d <= effR);
       }
     }
 
@@ -631,6 +769,7 @@ export class Game {
     }
     for (const p of this.teamB.players) {
       this.renderer.drawPlayer(p, {
+        selected: this.twoPlayer && p === this.selectedPlayer,
         currentTurn: this.turnManager.currentTeamId === 1 && this.turnManager.phase === 'choose',
       });
     }
@@ -656,9 +795,14 @@ export class Game {
     // Ride-off flash rings
     this.renderer.drawRideOffFlashes(this.rideOff.flashes);
 
-    // Hook prompt (when AI defender is in position during human's flick drag)
-    if (this.hookPromptVisible && this.hookSystem.hookerTeamId === 0 && this.flickMode) {
+    // Hook prompt — only relevant in vsAI mode
+    if (!this.twoPlayer && this.hookPromptVisible && this.hookSystem.hookerTeamId === 0 && this.flickMode) {
       this.renderer.drawHookPrompt(this.ball);
+    }
+
+    // 2P turn banner — remind which team should act
+    if (this.twoPlayer && this.turnManager.phase === 'choose') {
+      this.renderer.draw2PTurnBanner(this.turnManager.currentTeamId);
     }
 
     // Commentary ticker

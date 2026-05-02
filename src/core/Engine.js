@@ -4,24 +4,31 @@ import { FIELD, PHYSICS, CATEGORY } from '../utils/constants.js';
 const { Engine, World, Bodies, Body, Events, Composite } = Matter;
 
 export class PhysicsEngine {
-  constructor() {
+  /**
+   * @param {object} [fieldCfg]  - Optional field config override (for Arena mode).
+   *                               Defaults to FIELD constant when omitted.
+   * @param {number} [wallRestitution] - Override wall restitution for Arena boards.
+   */
+  constructor(fieldCfg = null, wallRestitution = null) {
     this.engine = Engine.create({ gravity: { x: 0, y: 0 } });
     this.world = this.engine.world;
     this.world.gravity.scale = 0;
 
     this.walls = [];
     this.goals = { left: null, right: null };
+    this._fieldCfg = fieldCfg || FIELD;
+    this._wallRestitution = wallRestitution !== null ? wallRestitution : PHYSICS.wallRestitution;
 
     this._buildBoundaries();
   }
 
   _buildBoundaries() {
-    const { width: W, height: H, goalWidth, goalDepth } = FIELD;
-    const t = 40; // wall thickness (outside the field)
+    const { width: W, height: H, goalWidth, goalDepth } = this._fieldCfg;
+    const t = 40;
 
     const wallOpts = {
       isStatic: true,
-      restitution: PHYSICS.wallRestitution,
+      restitution: this._wallRestitution,
       friction: 0.1,
       collisionFilter: { category: CATEGORY.wall, mask: CATEGORY.ball | CATEGORY.player },
       label: 'wall',
