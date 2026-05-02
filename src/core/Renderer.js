@@ -376,68 +376,271 @@ export class Renderer {
     const { x, y } = player;
     const r = player.radius !== undefined ? player.radius : 14;
     const color = player.teamId === 0 ? COLORS.teamA : COLORS.teamB;
+    const facing = player.facing !== undefined ? player.facing : 0;
+    const displayId = player.id !== undefined
+      ? player.id
+      : (player.role === 'attacker' ? 0 : player.role === 'allrounder' ? 1 : player.role === 'playmaker' ? 2 : 3);
 
-    // Shadow
-    ctx.fillStyle = COLORS.shadow;
+    // Drop shadow (world-space, before rotation)
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
     ctx.beginPath();
-    ctx.ellipse(x + 2, y + 5, r * 1.15, r * 0.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 3, y + 6, r * 1.3, r * 0.55, facing, 0, Math.PI * 2);
     ctx.fill();
 
-    // Highlight ring (selection / current turn)
+    // Highlight ring (selection / current turn) — world-space circle
     if (selected) {
       ctx.strokeStyle = COLORS.highlight;
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(x, y, r + 5, 0, Math.PI * 2);
+      ctx.arc(x, y, r + 6, 0, Math.PI * 2);
       ctx.stroke();
+      // Pulsing glow
+      ctx.save();
+      ctx.globalAlpha = 0.25 + 0.2 * Math.sin(performance.now() / 220);
+      ctx.strokeStyle = COLORS.highlight;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.arc(x, y, r + 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
     } else if (currentTurn) {
-      ctx.strokeStyle = 'rgba(255,209,102,0.35)';
+      ctx.strokeStyle = 'rgba(255,209,102,0.38)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(x, y, r + 4, 0, Math.PI * 2);
+      ctx.arc(x, y, r + 5, 0, Math.PI * 2);
       ctx.stroke();
     }
 
-    // Body (horse token) — rounded disc with shading
-    const g = ctx.createRadialGradient(x - r * 0.4, y - r * 0.5, r * 0.2, x, y, r);
-    g.addColorStop(0, '#ffffff');
-    g.addColorStop(0.2, color);
-    g.addColorStop(1, '#000000');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fill();
+    // Horse + rider drawn in rotated local space
+    this._drawHorseToken(ctx, x, y, facing, color, r, displayId);
 
-    // Rim
-    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
-    ctx.lineWidth = 1;
+    // Mallet — only for live Player objects (drawn after horse in world space)
+    if (typeof player.getMalletTip === 'function') this._drawMallet(player);
+  }
+
+  /**
+   * Draw a top-down cartoon horse+rider token centred at (cx, cy),
+   * rotated so the horse faces `facing` radians (0 = pointing right).
+   *
+   * Local coordinate system: +x = forward (horse nose), 0,0 = horse centre.
+   * Scale: horse body is roughly ±bx wide, ±by tall in local space.
+   */
+  _drawHorseToken(ctx, cx, cy, facing, color, r, playerId) {
+    const bx = r * 1.15;   // half-length of horse body (forward axis)
+    const by = r * 0.68;   // half-width of horse body (lateral axis)
+
+    // Darken the team colour for legs / outline
+    const darkColor = this._darkenColor(color, 0.45);
+    const legColor  = this._darkenColor(color, 0.35);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(facing);
+
+    // ── TAIL (rear arcs, behind horse body) ──────────────────────────────
+    ctx.save();
+    ctx.strokeStyle = '#5a3a18';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    // Upper tail arc
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.moveTo(-bx * 0.82, 0);
+    ctx.bezierCurveTo(-bx * 1.1, -by * 0.4, -bx * 1.35, -by * 0.9, -bx * 1.2, -by * 1.3);
+    ctx.stroke();
+    // Lower tail arc
+    ctx.beginPath();
+    ctx.moveTo(-bx * 0.82, 0);
+    ctx.bezierCurveTo(-bx * 1.05, by * 0.5, -bx * 1.3, by * 1.0, -bx * 1.15, by * 1.35);
+    ctx.stroke();
+    // Middle tail strand
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-bx * 0.85, 0);
+    ctx.bezierCurveTo(-bx * 1.2, 0, -bx * 1.4, by * 0.2, -bx * 1.3, by * 0.55);
+    ctx.stroke();
+    ctx.restore();
+
+    // ── REAR LEGS (two stubs, splayed behind centre) ──────────────────────
+    ctx.fillStyle = legColor;
+    // Left-rear
+    ctx.save();
+    ctx.translate(-bx * 0.38, by * 0.62);
+    ctx.rotate(0.18);
+    ctx.beginPath();
+    ctx.roundRect(-2.2, 0, 4.4, r * 0.52, 2);
+    ctx.fill();
+    ctx.restore();
+    // Right-rear
+    ctx.save();
+    ctx.translate(-bx * 0.38, -by * 0.62);
+    ctx.rotate(-0.18);
+    ctx.beginPath();
+    ctx.roundRect(-2.2, -r * 0.52, 4.4, r * 0.52, 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ── FRONT LEGS (two stubs, extended toward nose) ──────────────────────
+    // Left-front
+    ctx.save();
+    ctx.translate(bx * 0.35, by * 0.6);
+    ctx.rotate(-0.22);
+    ctx.beginPath();
+    ctx.roundRect(-2.2, 0, 4.4, r * 0.55, 2);
+    ctx.fill();
+    ctx.restore();
+    // Right-front
+    ctx.save();
+    ctx.translate(bx * 0.35, -by * 0.6);
+    ctx.rotate(0.22);
+    ctx.beginPath();
+    ctx.roundRect(-2.2, -r * 0.55, 4.4, r * 0.55, 2);
+    ctx.fill();
+    ctx.restore();
+
+    // ── MAIN BODY (elongated oval) ────────────────────────────────────────
+    const bodyGrad = ctx.createRadialGradient(-bx * 0.12, 0, r * 0.15, 0, 0, bx);
+    bodyGrad.addColorStop(0,   this._lightenColor(color, 0.38));
+    bodyGrad.addColorStop(0.5, color);
+    bodyGrad.addColorStop(1,   darkColor);
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, bx, by, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Outline
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = 1.2;
     ctx.stroke();
 
-    // Jersey number area (inner disc)
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.beginPath();
-    ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
-    ctx.fill();
+    // ── NECK (tapered bezier from body to head) ───────────────────────────
     ctx.fillStyle = color;
-    ctx.font = 'bold 11px ui-sans-serif, system-ui';
+    ctx.beginPath();
+    ctx.moveTo(bx * 0.6,  by * 0.28);
+    ctx.bezierCurveTo(bx * 0.85,  by * 0.22, bx * 0.95,  by * 0.14, bx * 1.02, 0);
+    ctx.bezierCurveTo(bx * 0.95, -by * 0.14, bx * 0.85, -by * 0.22, bx * 0.6,  -by * 0.28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+
+    // ── HEAD (small oval + muzzle) ────────────────────────────────────────
+    const hx = bx * 1.12;   // head centre x (forward)
+    const hr = r * 0.3;     // head radius
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(hx, 0, hr * 1.15, hr * 0.72, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    // Muzzle cap (darker front of nose)
+    ctx.fillStyle = this._darkenColor(color, 0.6);
+    ctx.beginPath();
+    ctx.ellipse(hx + hr * 0.72, 0, hr * 0.52, hr * 0.46, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Nostril dot
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.arc(hx + hr * 0.72, -hr * 0.15, 1.2, 0, Math.PI * 2);
+    ctx.fill();
+    // Eye
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.beginPath();
+    ctx.arc(hx - hr * 0.1, -hr * 0.35, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.arc(hx - hr * 0.1 - 0.5, -hr * 0.35 - 0.5, 0.6, 0, Math.PI * 2);
+    ctx.fill();
+    // Ear (small triangle)
+    ctx.fillStyle = this._lightenColor(color, 0.2);
+    ctx.beginPath();
+    ctx.moveTo(hx - hr * 0.35, -hr * 0.65);
+    ctx.lineTo(hx - hr * 0.05, -hr * 1.05);
+    ctx.lineTo(hx + hr * 0.15, -hr * 0.62);
+    ctx.closePath();
+    ctx.fill();
+
+    // ── MANE (short strokes along neck/back) ──────────────────────────────
+    ctx.strokeStyle = this._darkenColor(color, 0.55);
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) {
+      const mx = bx * (0.55 - i * 0.16);
+      ctx.beginPath();
+      ctx.moveTo(mx, -by * 0.28);
+      ctx.lineTo(mx - 1.5, -by * 0.55 - i * 0.8);
+      ctx.stroke();
+    }
+
+    // ── RIDER (helmet circle on horse's back) ─────────────────────────────
+    const rx = -bx * 0.08;  // rider sits slightly behind centre
+    const rRad = r * 0.36;
+    // Helmet shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    ctx.arc(rx + 1, 1.5, rRad + 1, 0, Math.PI * 2);
+    ctx.fill();
+    // Helmet body (white)
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.arc(rx, 0, rRad, 0, Math.PI * 2);
+    ctx.fill();
+    // Helmet team-colour band (equator stripe)
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(rx, 0, rRad, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = color;
+    ctx.fillRect(rx - rRad, -rRad * 0.28, rRad * 2, rRad * 0.56);
+    ctx.restore();
+    // Helmet rim
+    ctx.strokeStyle = darkColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(rx, 0, rRad, 0, Math.PI * 2);
+    ctx.stroke();
+    // Helmet peak (small visor brim pointing forward)
+    ctx.fillStyle = darkColor;
+    ctx.beginPath();
+    ctx.moveTo(rx + rRad * 0.7, -rRad * 0.22);
+    ctx.lineTo(rx + rRad * 1.25, -rRad * 0.12);
+    ctx.lineTo(rx + rRad * 1.2,  rRad * 0.12);
+    ctx.lineTo(rx + rRad * 0.7,  rRad * 0.22);
+    ctx.closePath();
+    ctx.fill();
+    // Jersey number
+    ctx.fillStyle = color === COLORS.teamA ? '#fff' : '#fff';
+    ctx.font = `bold ${Math.round(rRad * 1.05)}px ui-sans-serif, system-ui`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const displayId = player.id !== undefined ? player.id : (player.role === 'attacker' ? 0 : player.role === 'allrounder' ? 1 : player.role === 'playmaker' ? 2 : 3);
-    ctx.fillText(String(displayId + 1), x, y + 0.5);
+    // Number drawn upright despite canvas rotation — re-rotate to cancel
+    ctx.save();
+    ctx.translate(rx, 0);
+    ctx.rotate(-facing);
+    ctx.fillStyle = '#222';
+    ctx.fillText(String(playerId + 1), 0, 0.5);
+    ctx.restore();
 
-    // Mallet — only for live Player objects
-    if (typeof player.getMalletTip === 'function') this._drawMallet(player);
+    ctx.restore(); // end facing rotation
+  }
 
-    // Facing indicator
-    const facing = player.facing !== undefined ? player.facing : 0;
-    const fx = x + Math.cos(facing) * (r - 2);
-    const fy = y + Math.sin(facing) * (r - 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.beginPath();
-    ctx.arc(fx, fy, 2, 0, Math.PI * 2);
-    ctx.fill();
+  /** Lighten a hex colour by `amt` (0-1). */
+  _lightenColor(hex, amt) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const l = (v) => Math.min(255, Math.round(v + (255 - v) * amt));
+    return `rgb(${l(r)},${l(g)},${l(b)})`;
+  }
+
+  /** Darken a hex colour by `amt` (0-1). */
+  _darkenColor(hex, amt) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const d = (v) => Math.max(0, Math.round(v * (1 - amt)));
+    return `rgb(${d(r)},${d(g)},${d(b)})`;
   }
 
   _drawStaminaArc(player) {
@@ -533,12 +736,13 @@ export class Renderer {
 
   drawMoveGhost(player, mx, my, valid) {
     const ctx = this.ctx;
+    const r = player.radius !== undefined ? player.radius : 14;
+    const color = valid ? (player.teamId === 0 ? COLORS.teamA : COLORS.teamB) : '#888888';
+    const facing = player.facing !== undefined ? player.facing : 0;
+    const displayId = player.id !== undefined ? player.id : 0;
     ctx.save();
-    ctx.globalAlpha = 0.45;
-    ctx.fillStyle = valid ? (player.teamId === 0 ? COLORS.teamA : COLORS.teamB) : '#888';
-    ctx.beginPath();
-    ctx.arc(mx, my, player.radius, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.globalAlpha = 0.38;
+    this._drawHorseToken(ctx, mx, my, facing, color, r, displayId);
     ctx.restore();
   }
 
