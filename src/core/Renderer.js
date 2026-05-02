@@ -323,6 +323,7 @@ export class Renderer {
   }
 
   drawPlayer(player, { selected = false, currentTurn = false } = {}) {
+    this._drawStaminaArc(player);
     const ctx = this.ctx;
     const { x, y } = player;
     const r = player.radius;
@@ -389,6 +390,23 @@ export class Renderer {
     ctx.fill();
   }
 
+  _drawStaminaArc(player) {
+    if (player.stamina >= 0.99) return; // full — no arc needed
+    const ctx = this.ctx;
+    const { x, y, radius: r } = player;
+    const pct = player.stamina;
+    // Colour: green → orange → red
+    const hue = Math.round(pct * 120); // 0=red, 120=green
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, r + 3.5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * pct);
+    ctx.strokeStyle = `hsl(${hue},90%,55%)`;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.restore();
+  }
+
   _drawMallet(player) {
     const ctx = this.ctx;
     const tip = player.getMalletTip();
@@ -432,14 +450,16 @@ export class Renderer {
     ctx.stroke();
   }
 
-  drawMoveRadius(player, rowBonus = 0) {
+  drawMoveRadius(player, rowBonus = 0, staminaMult = 1.0) {
     const ctx = this.ctx;
+    const baseR = MOVEMENT.moveRadius * staminaMult;
     ctx.save();
     ctx.setLineDash([6, 6]);
-    ctx.strokeStyle = 'rgba(255,209,102,0.6)';
+    // Tint orange when stamina is low
+    ctx.strokeStyle = staminaMult < 1 ? 'rgba(255,140,40,0.65)' : 'rgba(255,209,102,0.6)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(player.x, player.y, MOVEMENT.moveRadius, 0, Math.PI * 2);
+    ctx.arc(player.x, player.y, baseR, 0, Math.PI * 2);
     ctx.stroke();
 
     if (rowBonus > 0) {
@@ -456,7 +476,7 @@ export class Renderer {
       ctx.fillStyle = 'rgba(100,255,180,0.85)';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('RIGHT OF WAY', player.x, player.y - MOVEMENT.moveRadius - rowBonus - 10);
+      ctx.fillText('RIGHT OF WAY', player.x, player.y - baseR - rowBonus - 10);
     }
     ctx.restore();
   }
@@ -621,6 +641,23 @@ export class Renderer {
     ctx.textBaseline = 'middle';
     ctx.fillText('LINE', ex + Math.cos(ang + Math.PI / 2) * 14,
                          ey + Math.sin(ang + Math.PI / 2) * 14);
+    ctx.restore();
+  }
+
+  // ── Ride-off flash ──────────────────────────────────────────────────────
+  drawRideOffFlashes(flashes) {
+    if (!flashes || flashes.length === 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    for (const f of flashes) {
+      const a = Math.max(0, f.alpha);
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = COLORS.highlight;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(f.player.x, f.player.y, f.player.radius + 6 + (1 - a) * 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 

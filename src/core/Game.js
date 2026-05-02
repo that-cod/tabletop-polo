@@ -9,11 +9,14 @@ import { GoalDetection } from '../systems/GoalDetection.js';
 import { BoundarySystem } from '../systems/BoundarySystem.js';
 import { FoulDetection } from '../systems/FoulDetection.js';
 import { HookSystem } from '../systems/HookSystem.js';
+import { PenaltyShootout } from '../systems/PenaltyShootout.js';
+import { RideOffSystem } from '../systems/RideOffSystem.js';
+import { MatchStats } from '../entities/MatchStats.js';
 import { AIOpponent } from '../ai/AIOpponent.js';
 import { HUD } from '../ui/HUD.js';
 import { Menus } from '../ui/Menus.js';
 import { Sounds } from '../audio/Sounds.js';
-import { FIELD, MOVEMENT, PHYSICS, MATCH } from '../utils/constants.js';
+import { FIELD, MOVEMENT, PHYSICS, MATCH, HANDICAP } from '../utils/constants.js';
 import { dist, clamp } from '../utils/math.js';
 
 const SCENE = { MENU: 'menu', PLAYING: 'playing', PAUSED: 'paused', GOAL: 'goal', OVER: 'over' };
@@ -39,6 +42,9 @@ export class Game {
     this.boundarySystem = new BoundarySystem(this.physics, this.ball);
     this.foulDetection  = new FoulDetection(this.ball);
     this.hookSystem      = new HookSystem();
+    this.shootout        = new PenaltyShootout();
+    this.rideOff         = new RideOffSystem();
+    this.stats           = new MatchStats();
     this.ai = new AIOpponent(this.teamB, 'medium');
 
     // Penalty shot state
@@ -84,6 +90,7 @@ export class Game {
 
     this.foulDetection.onFoul = (fouledTeamId, spot) => {
       if (this.scene !== SCENE.PLAYING) return;
+      this.stats.recordFoul(1 - fouledTeamId); // foul committed by the OTHER team
       this.sounds.whistle();
       this.hud.showAnnouncement('FOUL!');
       this.renderer.showCommentary(
@@ -128,13 +135,16 @@ export class Game {
                : `Chukka ${n} begins. ${lead}.`
       );
       this._resetPositions();
-      // Reset attackDir to default at chukka start
       this.teamA.attackDir = 1;
       this.teamB.attackDir = -1;
+      [...this.teamA.players, ...this.teamB.players].forEach(p => p.restoreStamina());
+      this.stats.setChukka(n);
       this.turnManager.reset(0);
     };
     this.match.onMatchEnd  = (winner) => this._onMatchEnd(winner);
-    this.match.onOvertime   = ()       => this._onOvertime();
+    this.match.onOvertime  = ()        => this._onOvertime();
+    this.match.onHalftime  = ()        => this._onHalftime();
+    this.match.onShootout  = ()        => this._startShootout();
 
     this.turnManager.onTurnChange = (teamId) => {
       this.selectedPlayer = null;
@@ -145,6 +155,20 @@ export class Game {
 
     this.hookSystem.onHookOpportunity = () => { this.hookPromptVisible = true; };
     this.hookSystem.onHookClose       = () => { this.hookPromptVisible = false; };
+
+    this.rideOff.onRideOff = (opp) => {
+      const oppName = opp.teamId === 0 ? 'RED' : 'BLUE';
+      this.sounds.rideOff();
+      this.renderer.showCommentary(`Ride-off! ${oppName} pushed off the line!`);
+    };
+    this.rideOff.onFoul = (foulTeamId) => {
+      if (this.scene !== SCENE.PLAYING) return;
+      this.sounds.whistle();
+      this.hud.showAnnouncement('DANGEROUS RIDING!');
+      const fouledTeamId = 1 - foulTeamId;
+      const spot = { x: FIELD.width * (fouledTeamId === 0 ? 0.82 : 0.18), y: FIELD.centerY };
+      this.foulDetection.onFoul(fouledTeamId, spot);
+    };
 
     // Keyboard: P pauses, H hooks
     window.addEventListener('keydown', (e) => {
@@ -164,18 +188,23 @@ export class Game {
   }
 
   start() {
-    this.menus.showStart((diff) => this._startMatch(diff));
+    this.menus.showStart((tier) => this._startMatch(tier));
     this._running = true;
     requestAnimationFrame((t) => this._loop(t));
   }
 
-  _startMatch(difficulty = 'medium') {
-    this.ai.difficulty = difficulty;
+  _startMatch(tier = 'club') {
+    const cfg = HANDICAP[tier] || HANDICAP.club;
+    this.ai.difficulty = cfg.difficulty;
+    this.currentTier   = tier;
     this._resetMatch();
+    // Apply head-start: positive = human (teamA) gets bonus goals
+    if (cfg.headStart > 0)  this.teamA.score = cfg.headStart;
+    if (cfg.headStart < 0)  this.teamB.score = -cfg.headStart;
     this.match.start();
     this.scene = SCENE.PLAYING;
     this.sounds.whistle();
-    this.hud.showAnnouncement(difficulty === 'easy' ? 'EASY' : difficulty === 'hard' ? 'HARD MODE' : 'MEDIUM');
+    this.hud.showAnnouncement(cfg.label.toUpperCase());
   }
 
   _resetMatch() {
@@ -190,6 +219,9 @@ export class Game {
     this.boundarySystem.reset();
     this.foulDetection.reset();
     this.hookSystem.reset();
+    this.shootout.reset();
+    this.rideOff.reset();
+    this.stats.reset();
     this.penaltyMode       = false;
     this.penaltyTeamId     = -1;
     this.hookPromptVisible = false;
@@ -208,7 +240,7 @@ export class Game {
     this.match.pause();
     this.menus.showPause(
       () => this._resume(),
-      () => { this.menus.clear(); this._startMatch(); }
+      () => { this.menus.clear(); this._startMatch(this.currentTier || 'club'); }
     );
   }
   _resume() {
@@ -279,18 +311,23 @@ export class Game {
 
   _tryMove(p) {
     const pl = this.selectedPlayer;
-    const bonus = (this.ball.rowTeamId === 0 && pl.teamId === 0) ? MOVEMENT.rowBonusPx : 0;
+    const rowBonus = (this.ball.rowTeamId === 0 && pl.teamId === 0) ? MOVEMENT.rowBonusPx : 0;
+    const effectiveRadius = (MOVEMENT.moveRadius + rowBonus) * pl.staminaMoveMultiplier();
     const d = dist(p.x, p.y, pl.x, pl.y);
-    if (d > MOVEMENT.moveRadius + bonus) return;
+    if (d > effectiveRadius) return;
 
     const tx = clamp(p.x, FIELD.margin + pl.radius, FIELD.width - FIELD.margin - pl.radius);
     const ty = clamp(p.y, FIELD.margin + pl.radius, FIELD.height - FIELD.margin - pl.radius);
 
-    // Foul check: did this move cross the active Line of Ball?
-    if (this.foulDetection.checkMove(pl.teamId, tx, ty)) return; // foul called — cancel move
+    if (this.foulDetection.checkMove(pl.teamId, tx, ty)) return;
+
+    // Ride-off check: does this move contact an opponent?
+    const foul = this.rideOff.check(pl, tx, ty, this.teamB.players);
+    if (foul) return; // dangerous riding called — cancel move
 
     pl.faceTowards(tx, ty);
     pl.startMoveTo(tx, ty);
+    pl.drainStamina(0.10);
     this.sounds.hit();
     this.turnManager.commitAction();
   }
@@ -325,7 +362,12 @@ export class Game {
     let vx = -(dx / len) * targetSpeed;
     let vy = -(dy / len) * targetSpeed;
 
-    // Apply hook deflection if one was armed (human H-key or AI pre-armed)
+    // Apply stamina power penalty before hook check
+    const powerMult = pl.staminaPowerMultiplier();
+    vx *= powerMult;
+    vy *= powerMult;
+
+    // Apply hook deflection if one was armed
     if (this.hookSystem.active) {
       const deflected = this.hookSystem.executeHook(vx, vy);
       vx = deflected.vx;
@@ -334,12 +376,14 @@ export class Game {
     }
 
     pl.faceTowards(this.ball.x, this.ball.y);
+    pl.drainStamina(0.12);
     this._applyFlick(pl, this.ball, vx, vy);
     this.turnManager.commitAction();
   }
 
   _applyFlick(player, ball, vx, vy) {
     ball.applyImpulse(vx, vy, player.teamId);
+    this.stats.recordFlick(player.teamId, player.x, player.y, ball.x, ball.y);
     this.sounds.flick();
     // Impact effect at mallet tip
     const tip = player.getMalletTip();
@@ -378,6 +422,7 @@ export class Game {
   }
 
   _onGoal(scoringTeamId) {
+    this.stats.recordGoal(scoringTeamId);
     // In overtime, first goal ends the match immediately
     if (this.match.isOvertime) {
       this.match.scoreGoal(scoringTeamId);
@@ -411,6 +456,23 @@ export class Game {
     }, 1400);
   }
 
+  _onHalftime() {
+    this.scene = SCENE.PAUSED;
+    this.sounds.halftime();
+    this.hud.showAnnouncement('HALF TIME');
+    this.menus.showHalftime(
+      this.teamA.score, this.teamB.score,
+      () => {
+        this._resetPositions();
+        this.teamA.attackDir = 1;
+        this.teamB.attackDir = -1;
+        this.match.start();
+        this.scene = SCENE.PLAYING;
+        if (this.match.onChukkaEnd) this.match.onChukkaEnd(this.match.chukka);
+      }
+    );
+  }
+
   _onOvertime() {
     this.sounds.whistle();
     this.hud.showAnnouncement('GOLDEN CHUKKA!');
@@ -421,13 +483,76 @@ export class Game {
     this.turnManager.reset(0);
   }
 
+  _startShootout() {
+    this.scene = SCENE.PAUSED;
+    this.sounds.shootoutWhistle();
+    this.menus.showShootout(this.shootout.scoreDisplay(), () => {
+      this.scene = SCENE.PLAYING;
+      this._wireShootout();
+      this.shootout.start();
+    });
+  }
+
+  _wireShootout() {
+    this.shootout.onShotReady = (teamId, spotX, spotY) => {
+      this.ball.reset(spotX, spotY);
+      this.turnManager.reset(teamId);
+      const teamName = teamId === 0 ? 'RED' : 'BLUE';
+      this.hud.showAnnouncement(`${teamName} SHOOTS`);
+      this.sounds.shootoutWhistle();
+      if (teamId === 1) {
+        // AI takes shot after short delay
+        setTimeout(() => this._executeAIPenalty(), 600);
+      }
+    };
+    this.shootout.onDone = (winner) => {
+      this.scene = SCENE.OVER;
+      this.sounds.whistle();
+      setTimeout(() => {
+        this.menus.showGameOver(
+          this.teamA.score + this.shootout.scores[0],
+          this.teamB.score + this.shootout.scores[1],
+          winner,
+          (tier) => this._startMatch(tier),
+          this.stats ? this.stats.summary() : null
+        );
+      }, 600);
+    };
+
+    // Intercept goal during shootout to record the shot
+    const origOnGoal = this.goalDetector.onGoal;
+    this.goalDetector.onGoal = (scoringTeamId) => {
+      if (this.shootout.active) {
+        this.renderer.triggerGoalFlash(scoringTeamId);
+        this.renderer.triggerShake(1.8, 200);
+        this.hud.showAnnouncement('GOAL!');
+        this.sounds.goal();
+        setTimeout(() => this.shootout.recordShot(true), 1200);
+      } else {
+        origOnGoal(scoringTeamId);
+      }
+    };
+
+    // Also detect shot missed (ball stops without goal) via turn switch
+    const origOnTurnChange = this.turnManager.onTurnChange;
+    this.turnManager.onTurnChange = (teamId) => {
+      if (this.shootout.active) {
+        // Ball stopped without goal — miss
+        setTimeout(() => this.shootout.recordShot(false), 200);
+        return;
+      }
+      if (origOnTurnChange) origOnTurnChange(teamId);
+    };
+  }
+
   _onMatchEnd(winner) {
     this.scene = SCENE.OVER;
     this.sounds.whistle();
     setTimeout(() => {
       this.menus.showGameOver(
         this.teamA.score, this.teamB.score, winner,
-        (diff) => this._startMatch(diff)
+        (tier) => this._startMatch(tier),
+        this.stats ? this.stats.summary() : null
       );
     }, 600);
   }
@@ -452,10 +577,12 @@ export class Game {
     this.teamA.update(dt);
     this.teamB.update(dt);
     this.ball.updateTrail();
+    this.stats.tickPossession(this.ball.x);
     this.goalDetector.update();
     this.boundarySystem.update();
     this.foulDetection.update();
     this.hookSystem.update(dt);
+    this.rideOff.update();
 
     // Match timer only during choose/resolving (not during GOAL pause)
     if (this.scene === SCENE.PLAYING) this.match.update(dt);
@@ -484,12 +611,13 @@ export class Game {
     if (this.selectedPlayer && this.turnManager.isHumanTurn() && this.turnManager.phase === 'choose'
         && !this.flickMode) {
       const rowBonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
-      this.renderer.drawMoveRadius(this.selectedPlayer, rowBonus);
+      this.renderer.drawMoveRadius(this.selectedPlayer, rowBonus, this.selectedPlayer.staminaMoveMultiplier());
       // Ghost preview of move destination
       if (!this.selectedPlayer.canReachBall(this.ball) || dist(this.hoverPos.x, this.hoverPos.y, this.ball.x, this.ball.y) > this.ball.radius + 16) {
         const bonus = (this.ball.rowTeamId === 0) ? MOVEMENT.rowBonusPx : 0;
+        const effR  = (MOVEMENT.moveRadius + bonus) * this.selectedPlayer.staminaMoveMultiplier();
         const d = dist(this.hoverPos.x, this.hoverPos.y, this.selectedPlayer.x, this.selectedPlayer.y);
-        const valid = d <= MOVEMENT.moveRadius + bonus;
+        const valid = d <= effR;
         this.renderer.drawMoveGhost(this.selectedPlayer, this.hoverPos.x, this.hoverPos.y, valid);
       }
     }
@@ -524,6 +652,9 @@ export class Game {
 
     // Goal flash
     this.renderer.drawGoalFlash();
+
+    // Ride-off flash rings
+    this.renderer.drawRideOffFlashes(this.rideOff.flashes);
 
     // Hook prompt (when AI defender is in position during human's flick drag)
     if (this.hookPromptVisible && this.hookSystem.hookerTeamId === 0 && this.flickMode) {

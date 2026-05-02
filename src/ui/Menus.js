@@ -1,4 +1,5 @@
 // DOM overlay menus (start, pause, game over)
+import { HANDICAP } from '../utils/constants.js';
 
 export class Menus {
   constructor(overlayEl) {
@@ -14,19 +15,30 @@ export class Menus {
     div.innerHTML = `
       <h1>TABLETOP POLO</h1>
       <p>Flick, strategise, score. 4 chukkas to victory.</p>
-      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT DIFFICULTY</p>
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <button style="flex:1;" data-diff="easy">Easy</button>
-        <button style="flex:1;background:#e8a020;" data-diff="medium">Medium</button>
-        <button style="flex:1;background:#c0392b;" data-diff="hard">Hard</button>
-      </div>
+      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT SKILL TIER</p>
+      ${this._tierButtons()}
       <button class="secondary" data-act="how">How to Play</button>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-diff="easy"]').onclick   = () => { this.clear(); onStart('easy'); };
-    div.querySelector('[data-diff="medium"]').onclick = () => { this.clear(); onStart('medium'); };
-    div.querySelector('[data-diff="hard"]').onclick   = () => { this.clear(); onStart('hard'); };
+    this._wireTierButtons(div, onStart);
     div.querySelector('[data-act="how"]').onclick = () => this.showHowTo(onStart);
+  }
+
+  _tierButtons() {
+    const styles = { novice: '#2e7d4f', club: '#e8a020', pro: '#c0392b' };
+    return `<div style="display:flex;gap:8px;margin-bottom:10px;">
+      ${Object.entries(HANDICAP).map(([key, t]) =>
+        `<button style="flex:1;background:${styles[key]};font-size:12px;" data-tier="${key}">
+          <b>${t.label}</b><br><span style="font-size:10px;opacity:0.85;">${t.desc}</span>
+        </button>`
+      ).join('')}
+    </div>`;
+  }
+
+  _wireTierButtons(div, cb) {
+    Object.keys(HANDICAP).forEach(key => {
+      div.querySelector(`[data-tier="${key}"]`).onclick = () => { this.clear(); cb(key); };
+    });
   }
 
   showHowTo(onStart) {
@@ -52,7 +64,7 @@ export class Menus {
       <button class="secondary" data-act="back">Back</button>
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart('medium'); };
+    div.querySelector('[data-act="start"]').onclick = () => { this.clear(); onStart('club'); };
     div.querySelector('[data-act="back"]').onclick = () => this.showStart(onStart);
   }
 
@@ -70,12 +82,13 @@ export class Menus {
     div.querySelector('[data-act="restart"]').onclick = () => { this.clear(); onRestart(); };
   }
 
-  showGameOver(teamAScore, teamBScore, winner, onRestart) {
+  showGameOver(teamAScore, teamBScore, winner, onRestart, stats = null) {
     this.clear();
     const div = document.createElement('div');
     div.className = 'menu';
     const title = winner === -1 ? 'DRAW!' : (winner === 0 ? 'RED WINS! 🏆' : 'BLUE WINS! 🏆');
     const sub   = winner === -1 ? 'A well-fought draw.' : (winner === 0 ? 'Excellent polo!' : 'The AI takes it!');
+    const statsHtml = stats ? this._statsHtml(stats) : '';
     div.innerHTML = `
       <h1>${title}</h1>
       <p>${sub}</p>
@@ -84,16 +97,63 @@ export class Menus {
         <span>–</span>
         <span class="blue">${teamBScore}</span>
       </div>
-      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">PLAY AGAIN — SELECT DIFFICULTY</p>
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <button style="flex:1;" data-diff="easy">Easy</button>
-        <button style="flex:1;background:#e8a020;" data-diff="medium">Medium</button>
-        <button style="flex:1;background:#c0392b;" data-diff="hard">Hard</button>
-      </div>
+      ${statsHtml}
+      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">PLAY AGAIN — SELECT TIER</p>
+      ${this._tierButtons()}
     `;
     this.el.appendChild(div);
-    div.querySelector('[data-diff="easy"]').onclick   = () => { this.clear(); onRestart('easy'); };
-    div.querySelector('[data-diff="medium"]').onclick = () => { this.clear(); onRestart('medium'); };
-    div.querySelector('[data-diff="hard"]').onclick   = () => { this.clear(); onRestart('hard'); };
+    this._wireTierButtons(div, onRestart);
+  }
+
+  _statsHtml(stats) {
+    const pct = (n, d) => d > 0 ? Math.round((n / d) * 100) : 50;
+    const totalFlicks = stats.flicksA + stats.flicksB;
+    const pctA = pct(stats.flicksA, totalFlicks);
+    const longestM = (stats.longestShot / 96).toFixed(1); // scaled to "yards"
+    return `
+      <div style="font-size:12px;margin:10px 0 6px;opacity:0.85;text-align:left;background:rgba(0,0,0,0.3);border-radius:6px;padding:10px 14px;">
+        <div style="margin-bottom:6px;font-weight:bold;opacity:0.6;">MATCH STATS</div>
+        <div style="display:flex;justify-content:space-between;"><span>💫 Flicks</span><span><span style="color:#d93636">${stats.flicksA}</span> vs <span style="color:#2b6fd6">${stats.flicksB}</span></span></div>
+        <div style="display:flex;justify-content:space-between;"><span>🏁 Possession</span><span><span style="color:#d93636">${pctA}%</span> RED</span></div>
+        <div style="display:flex;justify-content:space-between;"><span>🎦 Longest Shot</span><span>${longestM} yds</span></div>
+        <div style="display:flex;justify-content:space-between;"><span>⚠️ Fouls</span><span><span style="color:#d93636">${stats.foulsA}</span> RED / <span style="color:#2b6fd6">${stats.foulsB}</span> BLUE</span></div>
+      </div>`;
+  }
+
+  showShootout(roundData, onDone) {
+    this.clear();
+    const div = document.createElement('div');
+    div.className = 'menu';
+    div.innerHTML = `
+      <h1 style="color:#ffd166">⚽ PENALTY SHOOTOUT</h1>
+      <p>Still level after overtime!</p>
+      <p style="font-size:13px;opacity:0.8;">3 penalty shots each — sudden death from round 4</p>
+      <div style="margin:14px 0;font-size:22px;letter-spacing:2px;">${roundData}</div>
+      <button data-act="go">Begin Shootout</button>
+    `;
+    this.el.appendChild(div);
+    div.querySelector('[data-act="go"]').onclick = () => { this.clear(); onDone(); };
+  }
+
+  showHalftime(scoreA, scoreB, onContinue) {
+    this.clear();
+    const div = document.createElement('div');
+    div.className = 'menu';
+    const msg = scoreA > scoreB ? `💥 RED leads! Keep the pressure on!`
+               : scoreB > scoreA ? `🚨 BLUE leads — time to fight back!`
+               : `⚔️ Level at half-time — anything can happen!`;
+    div.innerHTML = `
+      <h1 style="color:#ffd166">HALF TIME</h1>
+      <div class="score-row">
+        <span class="red">${scoreA}</span>
+        <span>–</span>
+        <span class="blue">${scoreB}</span>
+      </div>
+      <p>${msg}</p>
+      <p style="font-size:11px;opacity:0.55;">Spectators are stomping the divots…</p>
+      <button data-act="continue">Continue</button>
+    `;
+    this.el.appendChild(div);
+    div.querySelector('[data-act="continue"]').onclick = () => { this.clear(); onContinue(); };
   }
 }

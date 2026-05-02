@@ -28,8 +28,12 @@ export class Player {
     this.body.playerRef = this;
     physics.add(this.body);
 
-    // Move state (animated slide)
+    // Move state
     this.moveTarget = null;
+
+    // Stamina (0-1)
+    this.stamina    = 1.0;
+    this.role       = null; // set by Team
   }
 
   get x() { return this.body.position.x; }
@@ -48,6 +52,24 @@ export class Player {
 
   startMoveTo(tx, ty) {
     this.moveTarget = { x: tx, y: ty };
+  }
+
+  drainStamina(amount = 0.12) {
+    this.stamina = Math.max(0, this.stamina - amount);
+  }
+
+  restoreStamina() {
+    this.stamina = 1.0;
+  }
+
+  /** Move radius multiplier from stamina — 1.0 full, 0.8 when tired */
+  staminaMoveMultiplier() {
+    return this.stamina < 0.3 ? 0.8 : 1.0;
+  }
+
+  /** Flick power multiplier — capped at 0.8 when stamina low */
+  staminaPowerMultiplier() {
+    return this.stamina < 0.3 ? 0.8 : 1.0;
   }
 
   update(dt) {

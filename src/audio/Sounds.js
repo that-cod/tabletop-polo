@@ -44,4 +44,23 @@ export class Sounds {
     this._beep({ freq: 660, dur: 0.35, type: 'sawtooth', gain: 0.22, delay: 0.26 });
   }
   select() { this._beep({ freq: 720, dur: 0.06, type: 'triangle', gain: 0.1 }); }
+
+  halftime() {
+    // Long triple whistle blast
+    this._beep({ freq: 1500, dur: 0.22, type: 'sine', gain: 0.18, delay: 0 });
+    this._beep({ freq: 1500, dur: 0.22, type: 'sine', gain: 0.18, delay: 0.28 });
+    this._beep({ freq: 1500, dur: 0.35, type: 'sine', gain: 0.20, delay: 0.56 });
+    // Crowd cheer (noise burst via sawtooth sweep)
+    this._beep({ freq: 220, slideTo: 440, dur: 0.6, type: 'sawtooth', gain: 0.12, delay: 1.0 });
+    this._beep({ freq: 330, slideTo: 550, dur: 0.5, type: 'sawtooth', gain: 0.10, delay: 1.2 });
+  }
+
+  shootoutWhistle() {
+    this._beep({ freq: 1800, dur: 0.18, type: 'sine', gain: 0.20 });
+    this._beep({ freq: 2000, dur: 0.12, type: 'sine', gain: 0.18, delay: 0.22 });
+  }
+
+  rideOff() {
+    this._beep({ freq: 140, slideTo: 80, dur: 0.18, type: 'square', gain: 0.14 });
+  }
 }

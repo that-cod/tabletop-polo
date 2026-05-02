@@ -87,6 +87,14 @@ export const AI = {
   },
 };
 
+// Handicap tiers — player picks on start screen
+// headStart > 0 = human starts ahead; < 0 = human starts behind (Pro challenge)
+export const HANDICAP = {
+  novice: { difficulty: 'easy',   headStart:  2, label: 'Novice',  desc: '+2 goal head-start' },
+  club:   { difficulty: 'medium', headStart:  0, label: 'Club',    desc: 'Level playing field' },
+  pro:    { difficulty: 'hard',   headStart: -1, label: 'Pro',     desc: 'AI gets +1 head-start' },
+};
+
 export const DEBUG = {
   showBodies: false,
   showMalletReach: false,

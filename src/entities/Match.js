@@ -12,9 +12,11 @@ export class Match {
     this.isOvertime = false;
 
     this.onChukkaEnd = null;
-    this.onMatchEnd = null;
+    this.onMatchEnd  = null;
     this.onOvertime  = null;
-    this.onGoal = null;
+    this.onHalftime  = null;
+    this.onShootout  = null; // fired when overtime ends still tied
+    this.onGoal      = null;
   }
 
   start() { this.running = true; }
@@ -35,10 +37,15 @@ export class Match {
   _endChukka() {
     this.timeLeft = 0;
     if (this.isOvertime) {
-      // Overtime clock ran out with no golden goal — end match on current score
-      this.ended = true;
-      this.running = false;
-      if (this.onMatchEnd) this.onMatchEnd(this.winner());
+      // Overtime clock ran out — if still tied, trigger penalty shootout
+      if (this.winner() === -1 && this.onShootout) {
+        this.running = false;
+        this.onShootout();
+      } else {
+        this.ended = true;
+        this.running = false;
+        if (this.onMatchEnd) this.onMatchEnd(this.winner());
+      }
       return;
     }
     if (this.chukka >= this.maxChukkas) {
@@ -55,7 +62,14 @@ export class Match {
     } else {
       this.chukka++;
       this.timeLeft = MATCH.chukkaSeconds;
-      if (this.onChukkaEnd) this.onChukkaEnd(this.chukka);
+      // Halftime fires after chukka 2 completes (before chukka 3 starts)
+      const isHalftime = this.chukka === Math.floor(this.maxChukkas / 2) + 1;
+      if (isHalftime && this.onHalftime) {
+        this.running = false; // pause until Game resumes after halftime screen
+        this.onHalftime();
+      } else {
+        if (this.onChukkaEnd) this.onChukkaEnd(this.chukka);
+      }
     }
   }
 
