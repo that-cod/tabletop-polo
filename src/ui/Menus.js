@@ -18,13 +18,17 @@ export class Menus {
       <p>Flick, strategise, score. 4 chukkas to victory.</p>
       <p style="font-size:12px;opacity:0.6;margin-bottom:4px;">GAME MODE</p>
       ${this._modeButtons()}
-      <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT SKILL TIER</p>
-      ${this._tierButtons()}
+      <div class="tier-section">
+        <p style="font-size:12px;opacity:0.6;margin-bottom:6px;">SELECT SKILL TIER</p>
+        ${this._tierButtons()}
+      </div>
+      <button data-act="watch" style="display:none;width:100%;background:#1a3a1a;margin-bottom:8px;">🤖⚔️🤖 Watch AI vs AI Match</button>
       <button class="secondary" data-act="how">How to Play</button>
     `;
     this.el.appendChild(div);
-    this._wireModeButtons(div);
+    this._wireModeButtons(div, onStart);
     this._wireTierButtons(div, (tier) => onStart(tier, this._selectedMode));
+    div.querySelector('[data-act="watch"]').onclick = () => { this.clear(); onStart('hard', this._selectedMode); };
     div.querySelector('[data-act="how"]').onclick = () => this.showHowTo(onStart);
   }
 
@@ -34,19 +38,38 @@ export class Menus {
       <button style="flex:1;min-width:70px;background:#5a3f8a;font-size:11px;" data-mode="2p">👥<br><b>Hot Seat</b><br><span style="font-size:9px;opacity:0.8;">2 players</span></button>
       <button style="flex:1;min-width:70px;background:#7a3a1a;font-size:11px;" data-mode="arena">🏟️<br><b>Arena</b><br><span style="font-size:9px;opacity:0.8;">3v3 boards</span></button>
       <button style="flex:1;min-width:70px;background:#4a1a6a;font-size:11px;" data-mode="tournament">🏆<br><b>Tournament</b><br><span style="font-size:9px;opacity:0.8;">3 matches</span></button>
+      <button style="flex:1;min-width:70px;background:#1a3a1a;font-size:11px;" data-mode="aiVsAi">🤖⚔️🤖<br><b>AI vs AI</b><br><span style="font-size:9px;opacity:0.8;">Watch &amp; relax</span></button>
     </div>
-    <p style="font-size:10px;opacity:0.45;margin:2px 0 8px;text-align:center;">Tournament ignores tier — 3 escalating AI matches.</p>`;
+    <p style="font-size:10px;opacity:0.45;margin:2px 0 8px;text-align:center;">Tournament — 3 escalating matches. AI vs AI — fully autonomous, no human needed.</p>`;
   }
 
-  _wireModeButtons(div) {
+  _wireModeButtons(div, onStart) {
+    const noTierModes = new Set(['aiVsAi', 'tournament']);
+    const tierSection = div.querySelector('.tier-section');
+    const watchBtn    = div.querySelector('[data-act="watch"]');
+
+    const refresh = (mode) => {
+      const skip = noTierModes.has(mode);
+      if (tierSection) tierSection.style.display = skip ? 'none' : '';
+      if (watchBtn)    watchBtn.style.display    = skip ? '' : 'none';
+    };
+
     div.querySelectorAll('[data-mode]').forEach(btn => {
       if (btn.dataset.mode === this._selectedMode) btn.style.outline = '2px solid #ffd166';
       btn.onclick = () => {
         this._selectedMode = btn.dataset.mode;
         div.querySelectorAll('[data-mode]').forEach(b => b.style.outline = '');
         btn.style.outline = '2px solid #ffd166';
+        refresh(btn.dataset.mode);
+        // Tournament: clicking the mode button immediately fires (no tier needed)
+        if (btn.dataset.mode === 'tournament') {
+          this.clear();
+          onStart('club', 'tournament');
+        }
       };
     });
+
+    refresh(this._selectedMode);
   }
 
   _tierButtons() {
@@ -64,6 +87,16 @@ export class Menus {
     Object.keys(HANDICAP).forEach(key => {
       div.querySelector(`[data-tier="${key}"]`).onclick = () => { this.clear(); cb(key); };
     });
+  }
+
+  /** Show/hide the tier section and expose a Watch button for AI vs AI mode. */
+  _updateTierVisibility(div, mode, onStart) {
+    const tierSection = div.querySelector('.tier-section');
+    const watchBtn    = div.querySelector('[data-act="watch"]');
+    if (!tierSection || !watchBtn) return;
+    const isAuto = mode === 'aiVsAi' || mode === 'tournament';
+    tierSection.style.display = isAuto ? 'none' : '';
+    watchBtn.style.display    = isAuto ? '' : 'none';
   }
 
   showHowTo(onStart) {

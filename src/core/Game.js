@@ -42,9 +42,11 @@ export class Game {
     this.penaltyMode   = false;
     this.penaltyTeamId = -1;
     this.hookPromptVisible = false;
-    this.twoPlayer  = false;
-    this.currentMode = 'vsAI';
-    this.currentTier = 'club';
+    this.twoPlayer    = false;
+    this.currentMode  = 'vsAI';
+    this.currentTier  = 'club';
+    this.isAutoPlay   = false;   // true when both teams are AI-controlled
+    this.autoPlaySpeed = 1;      // simulation speed multiplier (1/2/4/8)
 
     // Build subsystems for the default (field) mode
     this._buildSystems(null);
@@ -101,12 +103,12 @@ export class Game {
     this.tournament     = new Tournament();
     this.replay         = new Replay();
     this.ai             = new AIOpponent(this.teamB, 'medium');
+    this.aiA            = new AIOpponent(this.teamA, 'hard');  // used in AI vs AI mode
 
     this._wireGameEvents();
   }
 
   _wireInputEvents() {
-    // Keyboard: P pauses, H hooks (wired once — delegates to current this.* refs)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'p' || e.key === 'P' || e.key === 'Escape') {
         if (this.scene === SCENE.PLAYING) this._pause();
@@ -118,6 +120,13 @@ export class Game {
         this.hookPromptVisible = false;
         this.sounds.hit();
         this.renderer.showCommentary('HOOK! RED intercepts the mallet!');
+      }
+      // S = cycle simulation speed in AI vs AI mode
+      if ((e.key === 's' || e.key === 'S') && this.isAutoPlay) {
+        const speeds = [1, 2, 4, 8];
+        const next = speeds[(speeds.indexOf(this.autoPlaySpeed) + 1) % speeds.length];
+        this.autoPlaySpeed = next;
+        this.hud.showAnnouncement(`${next}x SPEED`);
       }
     });
   }
@@ -229,12 +238,108 @@ export class Game {
     this.menus.showStart((tier, mode) => {
       if (mode === 'tournament') {
         this._startTournament();
+      } else if (mode === 'aiVsAi') {
+        this._startAutoPlay(tier);
       } else {
         this._startMatch(tier, mode);
       }
     });
     this._running = true;
     requestAnimationFrame((t) => this._loop(t));
+  }
+
+  _startAutoPlay(tier = 'hard') {
+    this.isAutoPlay    = true;
+    this.autoPlaySpeed = 1;
+    this.twoPlayer     = false;
+    this.currentMode   = 'aiVsAi';
+    this.currentTier   = tier;
+
+    // Both AIs on hard for a competitive game
+    this.ai.difficulty  = 'hard';
+    this.aiA.difficulty = 'hard';
+
+    this._autoWireMenus();
+    this._resetMatch();
+    this.match.start();
+    this.scene = SCENE.PLAYING;
+    this.sounds.whistle();
+    this.hud.showAnnouncement('AI VS AI');
+    this.renderer.showCommentary('Sit back and watch — both teams are AI-controlled! Press S to change speed.');
+  }
+
+  /**
+   * In AI vs AI mode all modal menus must be auto-dismissed so the game
+   * keeps running without any human clicking a button.
+   */
+  _autoWireMenus() {
+    // Halftime: auto-continue after 2 s
+    this.match.onHalftime = () => {
+      this.scene = SCENE.PAUSED;
+      this.sounds.halftime();
+      this.hud.showAnnouncement('HALF TIME');
+      setTimeout(() => {
+        this._resetPositions();
+        this.teamA.attackDir = 1;
+        this.teamB.attackDir = -1;
+        this.match.start();
+        this.scene = SCENE.PLAYING;
+        if (this.match.onChukkaEnd) this.match.onChukkaEnd(this.match.chukka);
+      }, 2200);
+    };
+
+    // Chukka banners are already just HUD announcements, no modal needed
+    this.match.onChukkaEnd = (n) => {
+      this.sounds.whistle();
+      this.hud.showAnnouncement(`CHUKKA ${n}`);
+      this._resetPositions();
+      this.teamA.attackDir = 1;
+      this.teamB.attackDir = -1;
+      [...this.teamA.players, ...this.teamB.players].forEach(p => p.restoreStamina());
+      this.stats.setChukka(n);
+      this.turnManager.reset(0);
+    };
+
+    // Match end: show result for 3 s then auto-restart
+    this.match.onMatchEnd = (winner) => {
+      this.scene = SCENE.OVER;
+      this.sounds.whistle();
+      const name = winner === 0 ? 'RED' : winner === 1 ? 'BLUE' : 'DRAW';
+      this.hud.showAnnouncement(`${name} WINS!`);
+      setTimeout(() => {
+        if (this.isAutoPlay) this._startAutoPlay(this.currentTier);
+      }, 3500);
+    };
+
+    // Overtime needs no modal either
+    this.match.onOvertime  = () => this._onOvertime();
+    this.match.onShootout  = () => this._autoShootout();
+  }
+
+  /** Shootout in AI vs AI — both teams shoot via existing AI penalty logic. */
+  _autoShootout() {
+    this._wireShootout();
+    this.scene = SCENE.PLAYING;
+    this.shootout.start();
+    // Override onDone to auto-restart instead of showing modal
+    this.shootout.onDone = (winner) => {
+      this.scene = SCENE.OVER;
+      this.sounds.whistle();
+      const name = winner === 0 ? 'RED' : winner === 1 ? 'BLUE' : 'DRAW';
+      this.hud.showAnnouncement(`${name} WINS SHOOTOUT!`);
+      setTimeout(() => {
+        if (this.isAutoPlay) this._startAutoPlay(this.currentTier);
+      }, 3500);
+    };
+    // Both shootout teams use AI
+    this.shootout.onShotReady = (teamId, spotX, spotY) => {
+      this.ball.reset(spotX, spotY);
+      this.turnManager.reset(teamId);
+      const teamName = teamId === 0 ? 'RED' : 'BLUE';
+      this.hud.showAnnouncement(`${teamName} SHOOTS`);
+      this.sounds.shootoutWhistle();
+      setTimeout(() => this._executeAIPenalty(teamId), 600);
+    };
   }
 
   _startTournament() {
@@ -270,6 +375,7 @@ export class Game {
   }
 
   _startMatch(tier = 'club', mode = 'vsAI') {
+    this.isAutoPlay  = false;  // leaving auto-play mode resets flag
     const cfg = HANDICAP[tier] || HANDICAP.club;
     this.twoPlayer   = (mode === '2p' || mode === '2p-arena');
     this.currentTier = tier;
@@ -423,12 +529,13 @@ export class Game {
     this.turnManager.commitAction();
   }
 
-  _executeAIPenalty() {
-    // AI takes an undefended penalty shot — aimed at center of goal with small noise
-    const pl = this.teamB.closestToBall(this.ball);
+  _executeAIPenalty(teamId = 1) {
+    const shootingTeam = teamId === 0 ? this.teamA : this.teamB;
+    const af   = this.activeField;
+    const pl   = shootingTeam.closestToBall(this.ball);
     if (!pl) return;
-    const goalX = this.teamB.attackDir > 0 ? FIELD.width - 20 : 20;
-    const goalY = FIELD.centerY + (Math.random() - 0.5) * 40;
+    const goalX = shootingTeam.attackDir > 0 ? af.width - 20 : 20;
+    const goalY = af.centerY + (Math.random() - 0.5) * 40;
     const ang   = Math.atan2(goalY - this.ball.y, goalX - this.ball.x);
     const speed = 28;
     pl.faceTowards(this.ball.x, this.ball.y);
@@ -667,11 +774,19 @@ export class Game {
   // ---- Game loop ----
 
   _loop(t) {
-    const dt = Math.min(0.033, (t - this._lastTime) / 1000);
+    const rawDt = Math.min(0.033, (t - this._lastTime) / 1000);
     this._lastTime = t;
 
     if (this.scene === SCENE.PLAYING || this.scene === SCENE.GOAL) {
-      this._update(dt);
+      // In AI vs AI mode, run multiple physics sub-steps per frame to simulate speed-up.
+      // Cap sub-steps at 8 to prevent spiral-of-death; each sub-step dt stays capped.
+      const steps   = this.isAutoPlay ? Math.min(this.autoPlaySpeed, 8) : 1;
+      const stepDt  = rawDt / steps;
+      for (let i = 0; i < steps; i++) {
+        if (this.scene === SCENE.PLAYING || this.scene === SCENE.GOAL) {
+          this._update(stepDt);
+        }
+      }
     }
     this._render();
 
@@ -708,7 +823,7 @@ export class Game {
     // Turn resolution
     this.turnManager.update(dt, this.ball);
 
-    // AI turn — skipped in 2-player hot-seat mode
+    // AI turn for team B (always active when not 2P)
     if (!this.twoPlayer
         && this.scene === SCENE.PLAYING
         && this.turnManager.currentTeamId === 1
@@ -717,6 +832,19 @@ export class Game {
         ball: this.ball,
         turnManager: this.turnManager,
         opponentTeam: this.teamA,
+        applyFlick: (pl, ball, vx, vy) => this._applyFlick(pl, ball, vx, vy),
+      });
+    }
+
+    // AI turn for team A — only in AI vs AI mode
+    if (this.isAutoPlay
+        && this.scene === SCENE.PLAYING
+        && this.turnManager.currentTeamId === 0
+        && this.turnManager.phase === 'choose') {
+      this.aiA.update(dt, {
+        ball: this.ball,
+        turnManager: this.turnManager,
+        opponentTeam: this.teamB,
         applyFlick: (pl, ball, vx, vy) => this._applyFlick(pl, ball, vx, vy),
       });
     }
@@ -810,5 +938,10 @@ export class Game {
 
     // HUD
     this.hud.draw(this.match, this.turnManager, this.renderer.scorePulse);
+
+    // AI vs AI speed badge
+    if (this.isAutoPlay) {
+      this.renderer.drawAutoPlayBadge(this.autoPlaySpeed);
+    }
   }
 }

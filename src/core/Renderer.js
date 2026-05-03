@@ -348,6 +348,33 @@ export class Renderer {
     ctx.fill();
   }
 
+  /** Persistent badge shown during AI vs AI auto-play, with speed indicator. */
+  drawAutoPlayBadge(speed = 1) {
+    const ctx = this.ctx;
+    ctx.save();
+    const label  = `🤖 AI vs AI  ${speed}x`;
+    const hint   = 'S = change speed';
+    ctx.font = 'bold 12px ui-sans-serif, system-ui';
+    const tw = Math.max(ctx.measureText(label).width, ctx.measureText(hint).width) + 22;
+    const bx = 10;
+    const by = this.height - 56;
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.60)';
+    ctx.beginPath();
+    ctx.roundRect(bx, by, tw, 46, 8);
+    ctx.fill();
+    // Speed colour: green=1, yellow=2, orange=4, red=8
+    const speedColor = speed >= 8 ? '#ff4444' : speed >= 4 ? '#ff9900' : speed >= 2 ? '#ffd166' : '#66ff99';
+    ctx.fillStyle = speedColor;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, bx + 11, by + 9);
+    ctx.font = '10px ui-sans-serif, system-ui';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText(hint, bx + 11, by + 29);
+    ctx.restore();
+  }
+
   /** Show a pulsing REPLAY badge during goal highlight playback. */
   drawReplayBadge() {
     const ctx = this.ctx;
